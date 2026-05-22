@@ -5,18 +5,16 @@ import type {
   ReleaseEntry,
 } from '@line-harness/update-engine/pure'
 import {
-  detectFork,
-  findLatestUpgrade,
-  compareSemver,
+  detectFork as engineDetectFork,
+  findLatestUpgrade as engineFindLatestUpgrade,
+  compareSemver as engineCompareSemver,
 } from '@line-harness/update-engine/pure'
 
 // Re-export so consumers can import all upgrade-related types from one place
 export type { Manifest, CurrentVersion, ForkStatus, ReleaseEntry }
-export { detectFork, findLatestUpgrade, compareSemver }
-
-const MANIFEST_URL =
-  process.env.NEXT_PUBLIC_MANIFEST_URL ??
-  'https://github.com/Shudesu/line-harness-oss/releases/latest/download/release-manifest.json'
+export const detectFork = engineDetectFork
+export const findLatestUpgrade = engineFindLatestUpgrade
+export const compareSemver = engineCompareSemver
 
 // The Worker is on a separate origin from the static admin export, so admin
 // fetches must go through `NEXT_PUBLIC_API_URL` like the rest of `lib/api.ts`.
@@ -29,6 +27,9 @@ if (!API_URL) {
   )
 }
 
+const MANIFEST_URL =
+  process.env.NEXT_PUBLIC_MANIFEST_URL ?? `${API_URL}/admin/manifest`
+
 function adminKey(): string {
   const v = process.env.NEXT_PUBLIC_ADMIN_API_KEY
   if (!v) throw new Error('NEXT_PUBLIC_ADMIN_API_KEY not set')
@@ -36,11 +37,7 @@ function adminKey(): string {
 }
 
 export async function getCurrentVersion(): Promise<CurrentVersion> {
-  // /admin/version is intentionally unauthenticated on the worker, so the key
-  // is sent only for symmetry with the other endpoints. Worker ignores it.
-  const r = await fetch(`${API_URL}/admin/version`, {
-    headers: { 'x-admin-api-key': adminKey() },
-  })
+  const r = await fetch(`${API_URL}/admin/version`)
   if (!r.ok) throw new Error(`version fetch failed ${r.status}`)
   const j = (await r.json()) as {
     version: string
