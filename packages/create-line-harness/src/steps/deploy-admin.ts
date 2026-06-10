@@ -61,11 +61,26 @@ export async function deployAdmin(
   }
   projectSpinner.stop("Pages プロジェクト準備完了");
 
-  // Deploy to CF Pages — hand TTY over to wrangler
+  // Deploy to CF Pages — hand TTY over to wrangler.
+  //
+  // Pin `--branch main` to match the project's production branch (set above).
+  // Without it, wrangler infers the branch from git; deploying from any other
+  // branch (e.g. a `feat/*` worktree) creates a *preview* deployment that maps
+  // to `<branch>.<project>.pages.dev`, leaving the canonical
+  // `<project>.pages.dev` showing "Nothing is here yet".
   p.log.info("Admin UI をデプロイしています（wrangler の出力が表示されます）...");
   try {
     await wrangler(
-      ["pages", "deploy", "out", "--project-name", options.projectName, "--commit-dirty=true"],
+      [
+        "pages",
+        "deploy",
+        "out",
+        "--project-name",
+        options.projectName,
+        "--branch",
+        "main",
+        "--commit-dirty=true",
+      ],
       { cwd: webDir, tty: true },
     );
 
