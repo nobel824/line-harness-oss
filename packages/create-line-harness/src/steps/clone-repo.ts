@@ -16,17 +16,44 @@ const REPO_URL =
   "https://github.com/Shudesu/line-harness-oss.git";
 
 /**
+ * Make sure workspace dependencies are installed.
+ *
+ * The build step (`deployWorker`) relies on workspace binaries such as `tsc`
+ * and `tsup`, which only exist once `pnpm install` has populated
+ * `node_modules`. Resolving the repo from an existing checkout (`--repo-dir`,
+ * cwd, or `~/.line-harness`) used to skip the install entirely, so a checkout
+ * without `node_modules` would fail the build with "tsc: command not found".
+ */
+async function ensureDependencies(repoDir: string): Promise<void> {
+  if (existsSync(join(repoDir, "node_modules"))) {
+    return;
+  }
+
+  const s = p.spinner();
+  s.start("依存関係インストール中...");
+  try {
+    await repoPnpm(repoDir, ["install", "--frozen-lockfile"], { cwd: repoDir });
+  } catch {
+    // Lockfile may be out of sync — fall back to a normal install.
+    await repoPnpm(repoDir, ["install"], { cwd: repoDir });
+  }
+  s.stop("依存関係インストール完了");
+}
+
+/**
  * Clone the LINE Harness repo and install dependencies.
  * Returns the path to the cloned repo.
  */
 export async function ensureRepo(repoDir: string | null): Promise<string> {
   // If --repo-dir was given and has the repo, use it
   if (repoDir && existsSync(join(repoDir, "pnpm-workspace.yaml"))) {
+    await ensureDependencies(repoDir);
     return repoDir;
   }
 
   // Check if cwd is the repo
   if (existsSync(join(process.cwd(), "pnpm-workspace.yaml"))) {
+    await ensureDependencies(process.cwd());
     return process.cwd();
   }
 
@@ -84,6 +111,7 @@ export async function ensureRepo(repoDir: string | null): Promise<string> {
         // Non-critical — the next setup run will regenerate it again.
       }
     }
+    await ensureDependencies(homeDir);
     return homeDir;
   }
 
@@ -102,16 +130,7 @@ export async function ensureRepo(repoDir: string | null): Promise<string> {
   s.stop("ダウンロード完了");
 
   // Install dependencies
-  s.start("依存関係インストール中...");
-  try {
-    await repoPnpm(homeDir, ["install", "--frozen-lockfile"], {
-      cwd: homeDir,
-    });
-  } catch {
-    // Try without frozen lockfile
-    await repoPnpm(homeDir, ["install"], { cwd: homeDir });
-  }
-  s.stop("依存関係インストール完了");
+  await ensureDependencies(homeDir);
 
   return homeDir;
 }
