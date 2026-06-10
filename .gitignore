@@ -15,3 +15,7 @@ apps/web/out/
 apps/worker/dist/
 .worktrees/
 .claude/worktrees/
+
+# LINE Harness setup/state files — contain real channel tokens & API keys
+.line-harness-setup.json
+.line-harness-config.json
