@@ -27,7 +27,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db build
+      # worker は @line-harness/update-engine (main=dist/index.cjs) にも依存する。
+      # これを抜くと vite build が "Failed to resolve entry" で落ちる。
+      - run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db --filter @line-harness/update-engine build
 
       - name: Baseline _migrations for bootstrap-installed DBs
         env:
