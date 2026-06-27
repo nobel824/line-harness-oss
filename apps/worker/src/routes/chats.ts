@@ -8,6 +8,7 @@ import {
   deleteOperator,
   getChats,
   getChatById,
+  getChatByFriendId,
   createChat,
   getFriendById,
   getLineAccountById,
@@ -62,15 +63,17 @@ type ChatLike = {
 // push / broadcast / scenario 配信だけを受けた友だちもチャット画面に現れるため、ここで lazy create が必要。
 // 新規作成する場合は status='resolved' にし、last_message_at は messages_log の実際の最終時刻を使う
 // （jstNow を入れると一覧並び順が壊れるため）。
-async function resolveOrCreateChat(db: D1Database, id: string): Promise<ChatLike | null> {
+//
+// 既存行の採用は getChatByFriendId と同じ「最新行 (created_at DESC)」セマンティクスに統一する。
+// チャット一覧 / 友だち一覧 / 未対応カウントは全て最新 chat 行を読むため、status を書き込む resolve も
+// 同じ行を更新しないと、複数 chat 行を持つ friend で「解決済にしても未対応が消えない」ズレが出る
+// （以前は最古行 ASC を更新していた）。
+export async function resolveOrCreateChat(db: D1Database, id: string): Promise<ChatLike | null> {
   const existing = await getChatById(db, id);
   if (existing) return existing as ChatLike;
   const friend = await getFriendById(db, id);
   if (!friend) return null;
-  const byFriend = await db
-    .prepare(`SELECT * FROM chats WHERE friend_id = ? ORDER BY created_at ASC LIMIT 1`)
-    .bind(friend.id)
-    .first<ChatLike>();
+  const byFriend = await getChatByFriendId(db, friend.id);
   if (byFriend) return byFriend;
 
   const lastMsg = await db
@@ -82,7 +85,7 @@ async function resolveOrCreateChat(db: D1Database, id: string): Promise<ChatLike
   const newId = crypto.randomUUID();
   const now = jstNow();
   const lastMessageAt = lastMsg?.last ?? null;
-  // 同時実行で二重挿入されないように WHERE NOT EXISTS で原子挿入。挿入結果に関わらず最古行を返して収束。
+  // 同時実行で二重挿入されないように WHERE NOT EXISTS で原子挿入。挿入結果に関わらず最新行を返して収束。
   await db
     .prepare(
       `INSERT INTO chats (id, friend_id, status, last_message_at, created_at, updated_at)
@@ -91,10 +94,7 @@ async function resolveOrCreateChat(db: D1Database, id: string): Promise<ChatLike
     )
     .bind(newId, friend.id, lastMessageAt, now, now, friend.id)
     .run();
-  return (await db
-    .prepare(`SELECT * FROM chats WHERE friend_id = ? ORDER BY created_at ASC LIMIT 1`)
-    .bind(friend.id)
-    .first<ChatLike>())!;
+  return (await getChatByFriendId(db, friend.id))!;
 }
 
 async function resolveFriendAndAccessToken(
