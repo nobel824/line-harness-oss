@@ -29,6 +29,36 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db build
 
+      - name: Baseline _migrations for bootstrap-installed DBs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_NAME: ${{ secrets.D1_DATABASE_NAME }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$D1_DATABASE_NAME"
+
+          npx wrangler d1 execute "$D1_DATABASE_NAME" --remote --command \
+            "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+
+          # setup が bootstrap.sql で一括構築した DB は全テーブル/カラムが揃って
+          # いるのに _migrations が空。その状態で次ステップが 001 から再適用すると
+          # "duplicate column" で失敗する。_migrations が空のときだけ、bootstrap.sql
+          # に焼き込み済みの migration 名 (bootstrap-meta.json) を applied として登録し
+          # baseline する。既に行があれば (= 既に migration 追跡済みの DB) 何もしない。
+          count=$(npx wrangler d1 execute "$D1_DATABASE_NAME" --remote \
+            --command "SELECT COUNT(*) AS c FROM _migrations" --json \
+            | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));const r=d[0]&&d[0].results&&d[0].results[0];console.log(r?r.c:0)')
+          if [ "$count" = "0" ]; then
+            echo "Empty _migrations -> baseline from bootstrap-meta.json"
+            vals=$(node -e 'const m=require("./packages/db/bootstrap-meta.json").includedMigrations;process.stdout.write(m.map(n=>"(\x27"+n+"\x27,\x27bootstrap\x27)").join(","))')
+            npx wrangler d1 execute "$D1_DATABASE_NAME" --remote \
+              --command "INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES ${vals}"
+          else
+            echo "_migrations already has ${count} rows -> skip baseline"
+          fi
+
       - name: Run pending D1 migrations
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
