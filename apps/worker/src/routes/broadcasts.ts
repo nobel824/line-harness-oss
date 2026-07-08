@@ -13,6 +13,7 @@ import { computeDedupBroadcastPreview } from '../services/dedup-broadcast.js';
 import { processSegmentSend } from '../services/segment-send.js';
 import type { SegmentCondition } from '../services/segment-query.js';
 import { getLineAccountById } from '@line-crm/db';
+import { computeEngagementRate } from '../lib/engagement-rate.js';
 import type { Env } from '../index.js';
 
 const broadcasts = new Hono<Env>();
@@ -761,8 +762,8 @@ broadcasts.post('/api/broadcasts/:id/fetch-insight', async (c) => {
       rawResponse = JSON.stringify(response);
     }
 
-    const openRate = (delivered && uniqueImpression) ? uniqueImpression / delivered : null;
-    const clickRate = (delivered && uniqueClick) ? uniqueClick / delivered : null;
+    const openRate = computeEngagementRate(delivered, uniqueImpression);
+    const clickRate = computeEngagementRate(delivered, uniqueClick);
 
     // 旧コードの `ON CONFLICT(broadcast_id)` は broadcast_insights.broadcast_id に
     // UNIQUE 制約がないため D1 が `SQLITE_ERROR: ON CONFLICT clause does not match
