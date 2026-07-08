@@ -52,15 +52,15 @@ function loadDb() {
   return sqlite;
 }
 
-function seedFriend(sqlite, friendId, lineUserId) {
+function seedFriend(sqlite: Database.Database, friendId: string, lineUserId: string) {
   sqlite
     .prepare(`INSERT INTO friends (id, line_user_id, display_name, is_following) VALUES (?, ?, ?, 1)`)
     .run(friendId, lineUserId, friendId);
 }
 
 describe('webhook は messages_log に line_account_id をスタンプする', () => {
-  let sqlite;
-  let db;
+  let sqlite: Database.Database;
+  let db: D1Database;
 
   beforeEach(() => {
     sqlite = loadDb();
@@ -76,16 +76,16 @@ describe('webhook は messages_log に line_account_id をスタンプする', (
       {
         type: 'message',
         source: { type: 'user', userId: 'U_alice' },
-        message: { type: 'text', text: 'こんにちは' },
+        message: { type: 'text', id: 'm1', text: 'こんにちは' },
         replyToken: 'rt-1',
-      },
+      } as unknown as Parameters<typeof handleEvent>[2],
       'access-token',
       'acc-123', // lineAccountId
     );
 
     const row = sqlite
       .prepare(`SELECT direction, source, line_account_id FROM messages_log WHERE friend_id = 'f1'`)
-      .get();
+      .get() as { direction: string; source: string; line_account_id: string | null };
     expect(row).toBeTruthy();
     expect(row.direction).toBe('incoming');
     expect(row.line_account_id).toBe('acc-123');
@@ -100,16 +100,16 @@ describe('webhook は messages_log に line_account_id をスタンプする', (
       {
         type: 'message',
         source: { type: 'user', userId: 'U_bob' },
-        message: { type: 'text', text: 'hello' },
+        message: { type: 'text', id: 'm2', text: 'hello' },
         replyToken: 'rt-2',
-      },
+      } as unknown as Parameters<typeof handleEvent>[2],
       'access-token',
       null,
     );
 
     const row = sqlite
       .prepare(`SELECT line_account_id FROM messages_log WHERE friend_id = 'f2'`)
-      .get();
+      .get() as { line_account_id: string | null };
     expect(row.line_account_id).toBeNull();
   });
 });

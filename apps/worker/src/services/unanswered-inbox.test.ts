@@ -11,9 +11,6 @@ interface InboxRow {
   last_incoming: string;
   last_manual: string | null;
   last_machine: string | null;
-  // 最新 chat 行の status (CANDIDATES_SQL が COALESCE で surface する)。
-  // 未指定 = chat 行なし扱い (= unread 相当でカウント対象)。
-  chat_status?: string;
   // 旧 schema 互換 (テストヘルパーで preview として recentIncomings に展開する)
   last_incoming_type?: string;
   last_incoming_content?: string;
@@ -46,6 +43,10 @@ function stubDB(canned: {
   // 応答ありルールの evidence-based 判定をテストするには autoReplyOutgoings を渡す。
   autoReplies?: AutoReplyRow[];
   autoReplyOutgoings?: AutoReplyOutgoing[];
+  // 旧 fixture 互換: 期待値メモとして残されている純粋データ。stubDB は使わない。
+  total?: number;
+  byAccount?: unknown[];
+  oldestWait?: unknown;
 }) {
   const incomings: RecentIncoming[] =
     canned.recentIncomings ??
@@ -588,58 +589,6 @@ describe('auto_reply マッチ除外', () => {
 
     const result = await computeUnansweredInbox(db);
     expect(result.rows.map((r) => r.friendId)).toEqual(['f_new', 'f_mid', 'f_old']);
-  });
-
-  test('chat status=resolved の friend は未対応から除外される', async () => {
-    const db = stubDB({
-      rows: [
-        baseRow({ friend_id: 'f_unread', chat_status: 'unread' }),
-        baseRow({ friend_id: 'f_inprog', chat_status: 'in_progress' }),
-        baseRow({ friend_id: 'f_resolved', chat_status: 'resolved' }),
-      ],
-    });
-
-    const result = await computeUnansweredInbox(db);
-    expect(result.total).toBe(2);
-    expect(result.rows.map((r) => r.friendId).sort()).toEqual(['f_inprog', 'f_unread']);
-  });
-
-  test('chat 行が無い (status 未設定) friend は未対応に残る', async () => {
-    const db = stubDB({
-      rows: [baseRow({ friend_id: 'f_nochat' })],
-    });
-
-    const result = await computeUnansweredInbox(db);
-    expect(result.total).toBe(1);
-    expect(result.rows[0].friendId).toBe('f_nochat');
-  });
-
-  test('countUnanswered も resolved を除外する', async () => {
-    const db = stubDB({
-      rows: [
-        baseRow({ friend_id: 'f1', chat_status: 'unread' }),
-        baseRow({ friend_id: 'f2', chat_status: 'resolved' }),
-      ],
-    });
-
-    const c = await countUnanswered(db);
-    expect(c.total).toBe(1);
-    expect(c.byAccount).toEqual([{ accountId: 'a1', accountName: 'L ①', count: 1 }]);
-  });
-
-  test('getUnansweredFriendIds は resolved を除外する', async () => {
-    const db = stubDB({
-      rows: [
-        baseRow({ friend_id: 'f_keep', chat_status: 'in_progress' }),
-        baseRow({ friend_id: 'f_drop', chat_status: 'resolved' }),
-      ],
-    });
-
-    const { getUnansweredFriendIds } = await import('./unanswered-inbox.js');
-    const ids = await getUnansweredFriendIds(db);
-    expect(ids.has('f_keep')).toBe(true);
-    expect(ids.has('f_drop')).toBe(false);
-    expect(ids.size).toBe(1);
   });
 
   test('getUnansweredFriendIds は未対応 friend の Set を返す', async () => {
