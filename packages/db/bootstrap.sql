@@ -802,6 +802,11 @@ CREATE TABLE users (
   updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
+CREATE TABLE webhook_event_dedup (
+  event_id   TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
 CREATE INDEX idx_ad_conversion_logs_friend ON ad_conversion_logs (friend_id);
 
 CREATE INDEX idx_ad_conversion_logs_platform ON ad_conversion_logs (ad_platform_id);

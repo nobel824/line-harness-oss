@@ -19,6 +19,8 @@ import {
   addTagToFriend,
   getEntryRouteByRefCode,
   getMessageTemplateById,
+  claimWebhookEvent,
+  releaseWebhookEvent,
 } from '@line-crm/db';
 import type { EntryRoute } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
@@ -123,10 +125,37 @@ webhook.post('/webhook', async (c) => {
   // 非同期処理 — LINE は ~1s 以内のレスポンスを要求
   const processingPromise = (async () => {
     for (const event of body.events) {
+      // 冪等性: LINE の再送 (redelivery / 200 前 throw の再送) による同一イベントの
+      // 二重処理を防ぐ。webhookEventId で claim し、成功なら claim を残して skip 対象に、
+      // 失敗なら release して再送での再処理を許す (取りこぼさない)。id 欠損時は dedup
+      // せず通常処理する (LINE は常に付与するが防御的に)。
+      //
+      // claim / handleEvent / release はすべて try 内に置く。1 回の POST に複数イベントが
+      // 束ねられることがあり、claim (D1 書き込み) が一時障害で throw しても for ループを
+      // 止めず後続イベントを処理し続けるため (握りつぶさないと後続を取りこぼす)。
+      //
+      // トレードオフ (AC2): release して再処理する設計上、handleEvent が「副作用を一部
+      // 実行してから」throw すると、再送で副作用が二重に走りうる (例: 自動返信送信後に
+      // 後段で throw)。ただし本 dedup 導入前は "毎回" 二重処理だったため、正常系で重複を
+      // 防げる本実装は全ケースで現状より悪化しない。取りこぼし防止を優先した意図的選択。
+      const eventId = event.webhookEventId;
       try {
+        if (eventId) {
+          const claimed = await claimWebhookEvent(db, eventId);
+          if (!claimed) continue; // 既に処理済み → skip（重複再送）
+        }
         await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES);
       } catch (err) {
         console.error('Error handling webhook event:', err);
+        // 失敗したイベントは claim を解放し、LINE 再送で再処理できるようにする。
+        // release 自体の失敗でループを止めないよう握りつぶす。
+        if (eventId) {
+          try {
+            await releaseWebhookEvent(db, eventId);
+          } catch (relErr) {
+            console.error('Failed to release webhook dedup claim:', relErr);
+          }
+        }
       }
     }
   })();

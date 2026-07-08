@@ -189,6 +189,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_log_friend_source ON messages_log (frien
 CREATE INDEX IF NOT EXISTS idx_messages_log_friend_direction_created ON messages_log (friend_id, direction, created_at);
 
 -- ============================================================
+-- Webhook event dedup (idempotency)
+-- ============================================================
+-- LINE webhook 再送による同一イベントの二重処理を防ぐ。event_id = webhookEventId。
+-- 正常処理済みの id を残し、再送は skip。失敗時は行を削除して再処理を許す。
+-- 古い行は scheduled(6h) の cleanup で削除する。
+CREATE TABLE IF NOT EXISTS webhook_event_dedup (
+  event_id   TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+-- ============================================================
 -- Auto Replies
 -- ============================================================
 CREATE TABLE IF NOT EXISTS auto_replies (
