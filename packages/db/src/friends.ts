@@ -229,9 +229,12 @@ export async function getMergedMetadataByUserId(
   return merged;
 }
 
+// 「全体」友だち数。アカウント別カウント (WHERE is_following = 1 AND line_account_id = ?)
+// と分母を揃えるため is_following = 1 で絞る。以前は無条件 COUNT(*) だったため、
+// ブロック済み (is_following = 0) を含む「全体」がアカウント別合計と噛み合わなかった。
 export async function getFriendCount(db: D1Database): Promise<number> {
   const row = await db
-    .prepare(`SELECT COUNT(*) as count FROM friends`)
+    .prepare(`SELECT COUNT(*) as count FROM friends WHERE is_following = 1`)
     .first<{ count: number }>();
   return row?.count ?? 0;
 }
