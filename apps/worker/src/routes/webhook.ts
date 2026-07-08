@@ -22,7 +22,7 @@ import {
   claimWebhookEvent,
   releaseWebhookEvent,
 } from '@line-crm/db';
-import type { EntryRoute } from '@line-crm/db';
+import type { EntryRoute, Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
@@ -34,6 +34,46 @@ const webhook = new Hono<Env>();
 // bursty batched deliveries (~100 events × ~5 KB) while still well below the
 // 128 MB Cloudflare Workers memory ceiling.
 const MAX_WEBHOOK_BODY_SIZE = 1024 * 1024; // 1 MiB
+
+async function ensureFriendFromWebhookUser(
+  db: D1Database,
+  lineClient: LineClient,
+  userId: string,
+  lineAccountId: string | null,
+): Promise<Friend | null> {
+  let friend = await getFriendByLineUserId(db, userId);
+
+  if (!friend) {
+    let profile: Awaited<ReturnType<LineClient['getProfile']>> | null = null;
+    try {
+      profile = await lineClient.getProfile(userId);
+    } catch (err) {
+      // A signed webhook already proves this user interacted with the bot.
+      // If profile lookup is temporarily unavailable, keep the event processable
+      // by creating the friend with the LINE userId and filling profile later.
+      console.error('[webhook] Failed to get profile for unknown user', userId, err);
+    }
+
+    friend = await upsertFriend(db, {
+      lineUserId: userId,
+      displayName: profile?.displayName ?? null,
+      pictureUrl: profile?.pictureUrl ?? null,
+      statusMessage: profile?.statusMessage ?? null,
+    });
+    console.log(`[webhook] auto-registered existing friend userId=${userId} friendId=${friend.id}`);
+  }
+
+  if (lineAccountId && friend.line_account_id !== lineAccountId) {
+    const now = jstNow();
+    await db
+      .prepare('UPDATE friends SET line_account_id = ?, is_following = 1, updated_at = ? WHERE id = ?')
+      .bind(lineAccountId, now, friend.id)
+      .run();
+    friend = { ...friend, line_account_id: lineAccountId, is_following: 1, updated_at: now };
+  }
+
+  return friend;
+}
 
 webhook.post('/webhook', async (c) => {
   // Pre-read size guard: reject before reading the body if Content-Length is oversized.
@@ -275,7 +315,7 @@ export async function handleEvent(
                 const resolved = await resolveStepContent(db, firstStep);
                 const { resolveMetadata } = await import('../services/step-delivery.js');
                 const resolvedMeta = await resolveMetadata(db, { user_id: (friend as unknown as Record<string, string | null>).user_id, metadata: (friend as unknown as Record<string, string | null>).metadata });
-                const expandedContent = expandVariables(resolved.messageContent, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1]);
+                const expandedContent = expandVariables(resolved.messageContent, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1], undefined, resolved.messageType);
                 const message = buildMessage(resolved.messageType, expandedContent);
                 await lineClient.replyMessage(event.replyToken, [message]);
                 console.log(`Immediate delivery: sent step ${firstStep.id} to ${userId}`);
@@ -372,7 +412,7 @@ export async function handleEvent(
     const userId = event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await ensureFriendFromWebhookUser(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
     const postbackData = (event as unknown as { postback: { data: string } }).postback.data;
@@ -422,7 +462,7 @@ export async function handleEvent(
             response_type: rule.response_type,
             response_content: rule.response_content,
           });
-          const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1], workerUrl);
+          const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1], workerUrl, resolved.messageType);
           const replyMsg = buildMessage(resolved.messageType, expandedContent);
           await lineClient.replyMessage(event.replyToken, [replyMsg]);
 
@@ -452,7 +492,7 @@ export async function handleEvent(
   if (event.type === 'message' && event.message.type !== 'text') {
     const userId = event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await ensureFriendFromWebhookUser(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
     const msg = event.message as {
@@ -508,6 +548,11 @@ export async function handleEvent(
       )
       .bind(crypto.randomUUID(), friend.id, msg.type, finalContent, lineAccountId ?? null, jstNow())
       .run();
+    // text と同様、非 text の自発メッセージ (画像/スタンプ等) でも chat を unread に戻す。
+    // これが無いと resolved 除外 (unanswered-inbox CANDIDATES_SQL) が「解決済み後に
+    // 画像だけ送ってきた友だち」をバッジ・未対応一覧から永久に落としてしまう。
+    // 非 text は auto_reply keyword にマッチし得ないので常に要対応扱いで正しい。
+    await upsertChatOnMessage(db, friend.id);
     return;
   }
 
@@ -517,7 +562,7 @@ export async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await ensureFriendFromWebhookUser(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
     const incomingText = textMessage.text;
@@ -627,7 +672,7 @@ export async function handleEvent(
             response_type: rule.response_type,
             response_content: rule.response_content,
           });
-          const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta2 } as Parameters<typeof expandVariables>[1], workerUrl);
+          const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta2 } as Parameters<typeof expandVariables>[1], workerUrl, resolved.messageType);
           const replyMsg = buildMessage(resolved.messageType, expandedContent);
           await lineClient.replyMessage(event.replyToken, [replyMsg]);
           replyTokenConsumed = true;

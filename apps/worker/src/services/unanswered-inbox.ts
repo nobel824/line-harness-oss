@@ -75,11 +75,11 @@ function consumeAutoReplyEvidence(
 // プレビュー/タイプは別クエリで last_manual 以降の incoming 群から JS で決める
 // (auto_reply マッチを除いた「最新の非マッチ incoming」が triage 対象)。
 //
-// chat_status: 最新 chat 行の status を surface する。getChatByFriendId と同じ
-// 「最新 chat (created_at DESC LIMIT 1)」セマンティクスを相関サブクエリで再現
-// (friend ↔ chats は 1:多 になりうるため JOIN すると候補行が重複する)。
-// chat 行が無い friend は COALESCE で 'unread' 扱い (= カウント対象)。
-// resolved の除外判定は getAllUnansweredRows の JS 側で行う (単体テスト可能に保つ)。
+// chats.status='resolved' の friend は除外する。operator が管理画面で「解決済」に
+// した会話は、手動返信していなくてもバッジから消えるべき (「未読通知が減らない」
+// 2026-07-06 報告)。resolved 後に新しい非マッチ incoming が来ると webhook の
+// upsertChatOnMessage が status を 'unread' に戻すので、除外は自動解除される。
+// 'in_progress' は「まだ対応が終わってない」ので引き続きカウントする。
 const CANDIDATES_SQL = `
   WITH agg AS (
     SELECT
@@ -91,6 +91,13 @@ const CANDIDATES_SQL = `
         THEN created_at END) AS last_machine
     FROM messages_log
     GROUP BY friend_id
+  ),
+  latest_chat AS (
+    -- friend ごとの最新 chats 行の status (bare-column + 単一 MAX の argmax)。
+    -- 相関サブクエリだと候補 friend 数ぶん個別 seek になるため一括 GROUP BY で取る。
+    SELECT friend_id, status, MAX(created_at) AS created_at
+    FROM chats
+    GROUP BY friend_id
   )
   SELECT
     f.id            AS friend_id,
@@ -100,20 +107,16 @@ const CANDIDATES_SQL = `
     COALESCE(la.name, '(未分類)') AS account_name,
     agg.last_incoming,
     agg.last_manual,
-    agg.last_machine,
-    COALESCE((
-      SELECT c.status FROM chats c
-      WHERE c.friend_id = f.id
-      ORDER BY c.created_at DESC
-      LIMIT 1
-    ), 'unread') AS chat_status
+    agg.last_machine
   FROM friends f
   LEFT JOIN line_accounts la ON la.id = f.line_account_id
   JOIN agg ON agg.friend_id = f.id
+  LEFT JOIN latest_chat lc ON lc.friend_id = f.id
   WHERE f.is_following = 1
     AND (la.id IS NULL OR la.is_active = 1)
     AND agg.last_incoming IS NOT NULL
     AND (agg.last_manual IS NULL OR agg.last_manual < agg.last_incoming)
+    AND COALESCE(lc.status, 'unread') != 'resolved'
   ORDER BY agg.last_incoming ASC
 `;
 
@@ -204,7 +207,6 @@ interface RawCandidateRow {
   last_incoming: string;
   last_manual: string | null;
   last_machine: string | null;
-  chat_status: string;
 }
 
 interface RawIncomingRow {
@@ -279,11 +281,6 @@ async function getAllUnansweredRows(db: D1Database): Promise<UnansweredRow[]> {
 
   const rows: UnansweredRow[] = [];
   for (const c of candidates) {
-    // 解決済 (resolved) にしたチャットは未対応から除外する。
-    // 新着メッセージが来れば upsertChatOnMessage が resolved → unread に戻すので、
-    // 再オープン時は自動的にここを通過する (webhook.ts)。
-    if (c.chat_status === 'resolved') continue;
-
     const incomings = incomingsByFriend.get(c.friend_id) ?? [];
     // outgoings は consume するのでコピーを作る (元 Map の他参照を破壊しない)。
     // incomings は新しい順に処理し、各 outgoing を 1 incoming にしか割り当てない。
@@ -340,13 +337,23 @@ export async function computeUnansweredInbox(
 }
 
 /**
+ * 未対応 friend の row map を返す。row には未対応判定後の preview (auto_reply
+ * matched 等を除いた最新の actionable incoming) が含まれる。
+ * /api/chats?unansweredOnly=true で preview を上書きするのに使う。
+ */
+export async function getUnansweredRowsMap(db: D1Database): Promise<Map<string, UnansweredRow>> {
+  const rows = await getAllUnansweredRows(db);
+  return new Map(rows.map((r) => [r.friendId, r]));
+}
+
+/**
  * 未対応 (人間が返事してない) friend ID の Set を返す。
  * /api/chats?unansweredOnly=true で chat list を絞るのに使う。
  * 判定ロジックは getAllUnansweredRows と同じ source of truth。
  */
 export async function getUnansweredFriendIds(db: D1Database): Promise<Set<string>> {
-  const rows = await getAllUnansweredRows(db);
-  return new Set(rows.map((r) => r.friendId));
+  const map = await getUnansweredRowsMap(db);
+  return new Set(map.keys());
 }
 
 export async function countUnanswered(db: D1Database): Promise<UnansweredCount> {
