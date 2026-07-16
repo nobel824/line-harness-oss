@@ -42,6 +42,72 @@ export type ApiBroadcast = Omit<Broadcast, 'targetType'> & {
   failedAccountIds: string[] | null;
 };
 
+/** Question type for `/forms` fields — matches the worker/client submission consumers. */
+export type FormFieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'tel'
+  | 'email'
+  | 'date'
+  | 'select'
+  | 'radio'
+  | 'checkbox'
+
+export interface FormField {
+  /** データキー（回答保存時の key）。一意・必須。 */
+  name: string
+  /** 設問文。必須。 */
+  label: string
+  type: FormFieldType
+  required?: boolean
+  /** select/radio/checkbox のときのみ意味を持つ。 */
+  options?: string[]
+  placeholder?: string
+  /** 任意。2 で2列表示（radio/checkbox のみ意味を持つ）。 */
+  columns?: number
+}
+
+export interface FormUsedByAccount {
+  id: string
+  name: string
+  country: string | null
+  displayOrder: number
+  count: number
+}
+
+/** `GET /api/forms` / `GET /api/forms/:id` のレスポンス shape。 */
+export interface FormRecord {
+  id: string
+  name: string
+  description: string | null
+  /** worker は正常系で配列を返すが、念のため呼び出し側で string ガードを行う。 */
+  fields: FormField[] | string
+  saveToMetadata: boolean
+  isActive: boolean
+  submitCount: number
+  createdAt: string
+  updatedAt: string
+  lastSubmittedAt: string | null
+  usedByAccounts: FormUsedByAccount[]
+}
+
+export type FormCreateInput = {
+  name: string
+  description?: string
+  /** worker が stringify するため配列のまま送る。 */
+  fields?: FormField[]
+  saveToMetadata?: boolean
+}
+
+/**
+ * `onSubmitTagId` 等の送信後設定は意図的にここに含めない。
+ * PUT は undefined のキーを更新スキップする部分更新なので、含めなければ既存値が保全される。
+ */
+export type FormUpdateInput = FormCreateInput & {
+  isActive?: boolean
+}
+
 export type BroadcastInsight = {
   broadcastId?: string
   delivered: number | null
@@ -629,6 +695,24 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/auto-replies/${id}`, {
         method: 'DELETE',
       }),
+  },
+  forms: {
+    list: () =>
+      fetchApi<ApiResponse<FormRecord[]>>('/api/forms'),
+    get: (id: string) =>
+      fetchApi<ApiResponse<FormRecord>>(`/api/forms/${id}`),
+    create: (body: FormCreateInput) =>
+      fetchApi<ApiResponse<FormRecord>>('/api/forms', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (id: string, body: FormUpdateInput) =>
+      fetchApi<ApiResponse<FormRecord>>(`/api/forms/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/forms/${id}`, { method: 'DELETE' }),
   },
   automations: {
     list: (params?: { accountId?: string }) => {
