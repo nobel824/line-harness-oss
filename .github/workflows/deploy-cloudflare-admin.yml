@@ -27,6 +27,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @line-crm/shared build
+      # web は @line-harness/update-engine の dist を import する（update-client.ts → /pure）。
+      # dist は gitignore されており CI では未生成のため、web build 前にビルドしておく。
+      - run: pnpm --filter @line-harness/update-engine build
 
       - name: Capture build metadata
         id: build-meta
