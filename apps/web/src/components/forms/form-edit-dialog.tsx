@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import type { FormField, FormFieldType } from '@/lib/api'
+import type { Tag } from '@line-crm/shared'
 
 /** 選択肢(options)の編集UIを持つ設問タイプ。 */
 const OPTION_TYPES: ReadonlySet<FormFieldType> = new Set(['select', 'radio', 'checkbox'])
@@ -44,6 +45,12 @@ export interface FormDraft {
   isActive: boolean
   saveToMetadata: boolean
   fields: FormFieldDraft[]
+  /** 回答後に付けるタグ。`''` = なし。 */
+  onSubmitTagId: string
+  /** 回答後に送るメッセージの種別。`''` = なし。 */
+  onSubmitMessageType: '' | 'text' | 'flex'
+  /** 上記メッセージの本文（`onSubmitMessageType` が空のときは無視される）。 */
+  onSubmitMessageContent: string
 }
 
 export function newFieldDraft(): FormFieldDraft {
@@ -70,8 +77,30 @@ export default function FormEditDialog({ draft, onClose, onSaved }: Props) {
   const [isActive, setIsActive] = useState(draft.isActive)
   const [saveToMetadata, setSaveToMetadata] = useState(draft.saveToMetadata)
   const [fields, setFields] = useState<FormFieldDraft[]>(draft.fields)
+  const [onSubmitTagId, setOnSubmitTagId] = useState(draft.onSubmitTagId)
+  const [onSubmitMessageType, setOnSubmitMessageType] = useState(draft.onSubmitMessageType)
+  const [onSubmitMessageContent, setOnSubmitMessageContent] = useState(draft.onSubmitMessageContent)
+  const [tags, setTags] = useState<Tag[]>([])
+  const [tagsError, setTagsError] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    api.tags
+      .list()
+      .then((res) => {
+        if (cancelled) return
+        if (res.success) setTags(res.data)
+        else setTagsError('タグ一覧の取得に失敗しました')
+      })
+      .catch(() => {
+        if (!cancelled) setTagsError('タグ一覧の取得に失敗しました')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const updateField = (index: number, updates: Partial<FormFieldDraft>) => {
     setFields((prev) => prev.map((f, i) => (i === index ? { ...f, ...updates } : f)))
@@ -153,9 +182,29 @@ export default function FormEditDialog({ draft, onClose, onSaved }: Props) {
     const dupe = names.find((n, i) => names.indexOf(n) !== i)
     if (dupe) { setError(`設問のデータキー「${dupe}」が重複しています。名称を変えてください`); return }
 
+    // 送信後設定のバリデーション。改行を保持するため、判定は trim() で行うが
+    // 実際に送る値は onSubmitMessageContent（未加工）のまま使う。
+    if (onSubmitMessageType && onSubmitMessageContent.trim() === '') {
+      setError('回答後に送るメッセージの本文を入力してください')
+      return
+    }
+    if (onSubmitMessageType === 'flex') {
+      try {
+        JSON.parse(onSubmitMessageContent)
+      } catch {
+        setError('Flex メッセージの本文が正しい JSON ではありません')
+        return
+      }
+    }
+
     setError('')
     setSaving(true)
     try {
+      const onSubmitFields = {
+        onSubmitTagId: onSubmitTagId || null,
+        onSubmitMessageType: onSubmitMessageType || null,
+        onSubmitMessageContent: onSubmitMessageType ? onSubmitMessageContent : null,
+      }
       if (draft.id) {
         await api.forms.update(draft.id, {
           name: name.trim(),
@@ -163,6 +212,7 @@ export default function FormEditDialog({ draft, onClose, onSaved }: Props) {
           fields: finalFields,
           saveToMetadata,
           isActive,
+          ...onSubmitFields,
         })
       } else {
         await api.forms.create({
@@ -170,6 +220,7 @@ export default function FormEditDialog({ draft, onClose, onSaved }: Props) {
           description: description.trim(),
           fields: finalFields,
           saveToMetadata,
+          ...onSubmitFields,
         })
       }
       onSaved()
@@ -354,6 +405,60 @@ export default function FormEditDialog({ draft, onClose, onSaved }: Props) {
 
               {fields.length === 0 && (
                 <p className="text-xs text-gray-400 text-center py-4">設問がありません。「+ 設問を追加」から作成してください</p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-700">送信後設定</span>
+            </div>
+            <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 space-y-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">回答後に付けるタグ</label>
+                <select
+                  value={onSubmitTagId}
+                  onChange={(e) => setOnSubmitTagId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="">なし</option>
+                  {tags.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                {tagsError && <p className="text-[11px] text-red-500 mt-1">{tagsError}</p>}
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">回答後に送るメッセージ</label>
+                <select
+                  value={onSubmitMessageType}
+                  onChange={(e) => setOnSubmitMessageType(e.target.value as '' | 'text' | 'flex')}
+                  className="w-full border border-gray-300 rounded-md px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="">なし</option>
+                  <option value="text">テキスト</option>
+                  <option value="flex">Flex</option>
+                </select>
+              </div>
+
+              {(onSubmitMessageType === 'text' || onSubmitMessageType === 'flex') && (
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">
+                    {onSubmitMessageType === 'flex' ? 'Flex JSON' : 'メッセージ本文'}
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={onSubmitMessageContent}
+                    onChange={(e) => setOnSubmitMessageContent(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
+                    placeholder={
+                      onSubmitMessageType === 'flex'
+                        ? '{ "type": "bubble", ... }'
+                        : '回答ありがとうございました！'
+                    }
+                  />
+                </div>
               )}
             </div>
           </div>

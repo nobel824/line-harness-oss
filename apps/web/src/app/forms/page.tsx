@@ -31,6 +31,9 @@ function emptyDraft(): FormDraft {
     isActive: true,
     saveToMetadata: true,
     fields: [newFieldDraft()],
+    onSubmitTagId: '',
+    onSubmitMessageType: '',
+    onSubmitMessageContent: '',
   }
 }
 
@@ -54,6 +57,9 @@ function draftFromForm(f: FormListItem): FormDraft {
             columns: field.columns,
           }))
         : [newFieldDraft()],
+    onSubmitTagId: f.onSubmitTagId ?? '',
+    onSubmitMessageType: f.onSubmitMessageType ?? '',
+    onSubmitMessageContent: f.onSubmitMessageContent ?? '',
   }
 }
 
