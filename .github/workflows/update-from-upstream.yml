@@ -32,6 +32,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # gh は fork ではリモートを辿って upstream (Shudesu) を既定リポジトリに選ぶ。
+  # --repo を付け忘れた gh 呼び出しは本体に向いて 403 で落ちる（実際に初回実行で
+  # `gh workflow run` が Shudesu 宛に飛んでデプロイが起動しなかった）。個々のコマンドに
+  # --repo を足すやり方は、次に gh を足す人が同じ罠を踏むので、ここで全体を固定する。
+  GH_REPO: ${{ github.repository }}
   # マージのコンフリクトを自動解決してよいファイル = 決定論的な生成物だけ。
   # bootstrap.sql / bootstrap-meta.json は packages/db/scripts/generate-bootstrap.mjs の
   # 生成物で、フォークと本体の双方が migration を足すたび再生成するため構造的に毎回衝突する。
@@ -264,8 +269,9 @@ jobs:
           # GitHub は GITHUB_TOKEN による push ではワークフローを発火させない (再帰防止)。
           # workflow_dispatch と repository_dispatch だけが例外なので、デプロイは明示起動する。
           # これが無いとコードだけ main に進んで本番が古いまま取り残される。
-          gh workflow run deploy-cloudflare-worker.yml --ref main
-          gh workflow run deploy-cloudflare-admin.yml --ref main
+          # --repo は GH_REPO と二重の保険。本体 Shudesu へ絶対に飛ばさない。
+          gh workflow run deploy-cloudflare-worker.yml --repo "${{ github.repository }}" --ref main
+          gh workflow run deploy-cloudflare-admin.yml --repo "${{ github.repository }}" --ref main
           echo "Dispatched worker + admin deploys."
 
       # ── 引っかかった → PR にして人間へ ────────────────────────────────
