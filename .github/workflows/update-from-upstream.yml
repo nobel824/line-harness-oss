@@ -145,9 +145,15 @@ jobs:
         # 失敗しても job を止めない — decide に理由を届けて PR を作らせるため。
         continue-on-error: true
         run: |
-          set -e
-          pnpm install --no-frozen-lockfile
-          node packages/db/scripts/generate-bootstrap.mjs
+          set -o pipefail
+          # 失敗したら PR 本文にこのログを載せる。ci ステップは regen 失敗時に
+          # スキップされて /tmp/ci.log を作らないため、regen は自前のログを持つ。
+          run_regen() {
+            set -e
+            pnpm install --no-frozen-lockfile
+            node packages/db/scripts/generate-bootstrap.mjs
+          }
+          run_regen 2>&1 | tee /tmp/regen.log
           # shellcheck disable=SC2086  # 複数パスへ意図的に単語分割する
           git add -- $GENERATED_FILES
 
@@ -318,8 +324,10 @@ jobs:
             regen)
               title="❌ upstream 同期: 生成ファイルの再生成に失敗"
               summary="生成ファイルの自動解決に失敗しました。マージは未完成のままコミットしてあります。"
-              body_file=/tmp/ci.log
-              body_title="ログ（末尾）"
+              # ci ステップは regen 失敗時にスキップされ /tmp/ci.log を作らないので、
+              # ここで参照するのは regen 自身のログでなければならない。
+              body_file=/tmp/regen.log
+              body_title="再生成ログ（末尾）"
               fence="text"
               ;;
           esac

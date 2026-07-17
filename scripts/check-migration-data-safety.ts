@@ -68,10 +68,14 @@ const RULES: Rule[] = [
     // SET ...` (https://www.sqlite.org/lang_update.html), which that narrower
     // shape silently misses.
     //
-    // The lookbehind lets `INSERT ... ON CONFLICT DO UPDATE SET` (an upsert on
-    // rows this migration is itself inserting) through — the only UPDATE spelling
-    // that is not a mass rewrite.
-    pattern: /(?<!\bDO\s{1,8})\bUPDATE\s+(?:OR\s+(?:IGNORE|REPLACE|ROLLBACK|ABORT|FAIL)\s+)?[^\s;]+/gi,
+    // Two spellings of UPDATE are not row rewrites, and are excluded:
+    //   - lookbehind: `INSERT ... ON CONFLICT DO UPDATE SET` — an upsert on the
+    //     rows this migration is itself inserting.
+    //   - lookahead: `CREATE TRIGGER ... {AFTER,BEFORE,INSTEAD OF} UPDATE [OF col]
+    //     ON <table>` — a trigger *definition*, not a write. `updated_at` touch
+    //     triggers are routine; flagging them would send safe migrations to human
+    //     review every time and train the operator to rubber-stamp the gate.
+    pattern: /(?<!\bDO\s{1,8})\bUPDATE\s+(?!(?:ON|OF)\b)(?:OR\s+(?:IGNORE|REPLACE|ROLLBACK|ABORT|FAIL)\s+)?[^\s;]+/gi,
   },
   {
     rule: 'REPLACE INTO',

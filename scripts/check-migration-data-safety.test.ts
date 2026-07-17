@@ -104,6 +104,25 @@ describe('scanDataSafety — 安全な migration を誤検知しない', () => {
     expect(scanDataSafety(sql)).toEqual([]);
   });
 
+  // トリガー定義は書き込みではない。updated_at の自動更新はごくありふれた安全な
+  // migration で、これを毎回止めると「危険なものだけ人間に回す」設計が形骸化する。
+  it('does not flag CREATE TRIGGER ... AFTER UPDATE ON (trigger definition, not a write)', () => {
+    const sql = `CREATE TRIGGER touch_updated_at AFTER UPDATE ON chats
+                 BEGIN UPDATE chats SET updated_at = datetime('now') WHERE id = NEW.id; END;`;
+    // 本体の UPDATE ... SET は拾うが、"AFTER UPDATE ON" 自体は拾わない
+    expect(scanDataSafety(sql).map((f) => f.excerpt)).toEqual(['UPDATE chats']);
+  });
+
+  it('does not flag BEFORE UPDATE OF <col> ON <table>', () => {
+    const sql = `CREATE TRIGGER t BEFORE UPDATE OF status ON chats BEGIN SELECT 1; END;`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('does not flag INSTEAD OF UPDATE ON <view>', () => {
+    const sql = `CREATE TRIGGER t INSTEAD OF UPDATE ON v BEGIN SELECT 1; END;`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
   it('still flags real SQL that follows a comment on the same line', () => {
     const sql = `DELETE FROM a; -- DROP TABLE b;`;
     expect(scanDataSafety(sql).map((f) => f.rule)).toEqual(['DELETE FROM']);
