@@ -1,4 +1,5 @@
 import { createTrackedLink } from '@line-crm/db';
+import { resolveTrackedLinkBaseUrl } from '../lib/link-base-url.js';
 
 // Domains where Universal Links / App Links should be used
 const APP_LINK_DOMAINS = new Set([
@@ -45,22 +46,25 @@ const URL_REGEX = /https?:\/\/[^\s"'<>\])}]+/g;
 
 // URLs that should NOT be wrapped (internal/system URLs)
 const SKIP_PATTERNS = [
-  /\/t\/[0-9a-f-]{36}/,       // already a tracking link
+  /\/t\/[0-9a-f-]{36}/,       // already a tracking link (legacy UUID form)
   /liff\.line\.me/,            // LIFF URLs
   /line\.me\/R\//,             // LINE deep links
   /your-worker-name/,           // our own worker
 ];
 
-function shouldSkip(url: string): boolean {
-  return SKIP_PATTERNS.some((p) => p.test(url));
+function shouldSkip(url: string, skipPrefixes: string[]): boolean {
+  if (SKIP_PATTERNS.some((p) => p.test(url))) return true;
+  // Short-code tracking links (/t/Ab3xY9k) don't match the UUID pattern, so
+  // skip anything under our own worker or the configured short domain.
+  return skipPrefixes.some((prefix) => prefix && url.startsWith(`${prefix}/t/`));
 }
 
 /** Extract trackable URLs from content string */
-function extractUrls(content: string): Set<string> {
+function extractUrls(content: string, skipPrefixes: string[]): Set<string> {
   const urls = new Set<string>();
   for (const match of content.matchAll(URL_REGEX)) {
     const url = match[0].replace(/[.,;:!?)]+$/, '');
-    if (!shouldSkip(url)) urls.add(url);
+    if (!shouldSkip(url, skipPrefixes)) urls.add(url);
   }
   return urls;
 }
@@ -69,23 +73,28 @@ function extractUrls(content: string): Set<string> {
 async function createTrackingMap(
   db: D1Database,
   urls: Set<string>,
-  workerUrl: string,
+  linkBase: string,
   lineAccountId?: string | null,
 ): Promise<Map<string, { trackingUrl: string; originalUrl: string; label: string }>> {
-  const urlMap = new Map<string, { trackingUrl: string; originalUrl: string; label: string }>();
-  for (const url of urls) {
-    const link = await createTrackedLink(db, {
-      name: `auto: ${url.slice(0, 60)}`,
-      originalUrl: url,
-      lineAccountId: lineAccountId ?? null,
-    });
-    // Use direct /t/ URL — Worker handles LINE app detection and LIFF redirect server-side
-    const trackingUrl = `${workerUrl}/t/${link.id}`;
-    const hostname = new URL(url).hostname.replace('www.', '');
-    const label = hostname.length > 20 ? hostname.slice(0, 20) + '…' : hostname;
-    urlMap.set(url, { trackingUrl, originalUrl: url, label });
-  }
-  return urlMap;
+  // Inserts are independent (each generates its own id/short_code), so run
+  // them concurrently — a carousel can hold 10+ URIs and sequential D1
+  // round-trips add up inside per-friend delivery loops.
+  const entries = await Promise.all(
+    [...urls].map(async (url) => {
+      const link = await createTrackedLink(db, {
+        name: `auto: ${url.slice(0, 60)}`,
+        originalUrl: url,
+        lineAccountId: lineAccountId ?? null,
+      });
+      // /t/ URL — Worker handles LINE app detection and LIFF redirect server-side.
+      // Prefer the short code (linkBase may be a branded short domain).
+      const trackingUrl = `${linkBase}/t/${link.short_code ?? link.id}`;
+      const hostname = new URL(url).hostname.replace('www.', '');
+      const label = hostname.length > 20 ? hostname.slice(0, 20) + '…' : hostname;
+      return [url, { trackingUrl, originalUrl: url, label }] as const;
+    }),
+  );
+  return new Map(entries);
 }
 
 /** Build a Flex bubble from text + tracked URLs */
@@ -165,6 +174,45 @@ export interface AutoTrackOptions {
 }
 
 /**
+ * Append `f=<friendId>` to every /t/ tracked-link URL in per-friend message
+ * content. With f= present, /t skips the LIFF identification hop entirely
+ * (no consent screen, no extra tap) and still attributes the click — the
+ * friend is already known because the message was pushed 1:1.
+ *
+ * Only valid for per-friend sends (scenario step delivery, manual DM,
+ * OAuth immediate push). NEVER use for multicast/broadcast content: the same
+ * body goes to many users, so a baked f= would attribute everyone's clicks
+ * to one friend.
+ */
+export async function appendFriendToTrackedLinks(
+  db: D1Database,
+  content: string,
+  workerUrl: string,
+  friendId: string | null | undefined,
+): Promise<string> {
+  if (!friendId) return content;
+  const workerBase = workerUrl.replace(/\/$/, '');
+  const linkBase = await resolveTrackedLinkBaseUrl(db, workerUrl);
+  const bases = [...new Set([workerBase, linkBase])];
+  return content.replace(URL_REGEX, (match) => {
+    // URL_REGEX greedily captures trailing sentence punctuation and even
+    // full-width Japanese text glued to the URL (「…/t/abc。続き」等)。
+    // URL は ASCII のみなので、まず ASCII 境界で切り、さらに extractUrls と
+    // 同じ末尾記号を URL の外として扱う。f= はその手前に挿す。
+    const ascii = match.match(/^[\x21-\x7E]+/)?.[0] ?? '';
+    const punct = ascii.match(/[.,;:!?)]+$/)?.[0] ?? '';
+    const url = punct ? ascii.slice(0, -punct.length) : ascii;
+    const trailing = match.slice(url.length);
+    const isTrackedLink = bases.some((b) => url.startsWith(`${b}/t/`));
+    if (!isTrackedLink) return match;
+    if (/[?&]f=/.test(url)) return match;
+    // /t links never carry fragments, so appending at the end is safe.
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}f=${encodeURIComponent(friendId)}${trailing}`;
+  });
+}
+
+/**
  * Auto-wrap URLs in message content with tracking links.
  * For text messages with URLs, converts to Flex with button.
  * For flex messages, replaces URLs inline.
@@ -178,8 +226,19 @@ export async function autoTrackContent(
 ): Promise<AutoTrackResult> {
   if (messageType === 'image') return { messageType, content };
 
-  const urls = extractUrls(content);
+  // Extract first so URL-free messages (the common case in per-friend
+  // delivery loops) skip the settings lookup entirely.
+  const workerBase = workerUrl.replace(/\/$/, '');
+  let urls = extractUrls(content, [workerBase]);
   if (urls.size === 0) return { messageType, content };
+
+  // Branded short domain (tracked_link_base_url) when configured, else workerUrl.
+  // Re-filter: short-domain /t links are already tracked — never re-wrap them.
+  const linkBase = await resolveTrackedLinkBaseUrl(db, workerUrl);
+  if (linkBase !== workerBase) {
+    urls = new Set([...urls].filter((u) => !u.startsWith(`${linkBase}/t/`)));
+    if (urls.size === 0) return { messageType, content };
+  }
 
   // Text messages: app-link domain (YouTube / X / TikTok 等) は raw URL を残して
   //   `?openExternalBrowser=1` だけ付ける。LINE 上で rich preview (YT サムネ等) が
@@ -192,7 +251,7 @@ export async function autoTrackContent(
     // (無駄な link_clicks レコード防止)。
     const trackable = new Set([...urls].filter((u) => !isAppLinkDomain(u)));
     const urlMap = trackable.size > 0
-      ? await createTrackingMap(db, trackable, workerUrl, options?.lineAccountId)
+      ? await createTrackingMap(db, trackable, linkBase, options?.lineAccountId)
       : new Map<string, { trackingUrl: string; originalUrl: string; label: string }>();
 
     let result = content;
@@ -209,15 +268,75 @@ export async function autoTrackContent(
     return { messageType: 'text', content: result };
   }
 
-  // Flex messages → replace URLs inline in the JSON
-  // For app-link domains, also inject openExternalBrowser=1 into the URI action
-  const urlMap = await createTrackingMap(db, urls, workerUrl, options?.lineAccountId);
-  let result = content;
-  for (const [original, { trackingUrl, originalUrl }] of urlMap) {
-    const finalUrl = isAppLinkDomain(originalUrl)
-      ? appendOpenExternalBrowser(trackingUrl)
-      : trackingUrl;
-    result = result.split(original).join(finalUrl);
+  // Flex messages → rewrite ONLY uri actions (action / defaultAction / altUri.desktop).
+  // Never rewrite the `url` field of image/video/icon components: LINE's media
+  // loader fetches that URL directly, and /t returns an HTML interstitial (not
+  // an image), which renders hero/body images as blank space.
+  let tree: unknown;
+  try {
+    tree = JSON.parse(content);
+  } catch {
+    // Not valid JSON — leave untouched rather than risk corrupting the payload
+    return { messageType, content };
   }
-  return { messageType, content: result };
+  const skipPrefixes = linkBase !== workerBase ? [workerBase, linkBase] : [workerBase];
+  const actionUris = new Set<string>();
+  collectActionUris(tree, actionUris);
+  // Only valid http(s) URIs are trackable (uri actions also allow tel:,
+  // line://, etc., and hand-written JSON can hold malformed URLs like a bare
+  // "https://" — createTrackingMap calls `new URL()`, so an invalid URI here
+  // would throw and fail the whole delivery instead of one link).
+  const trackableUris = new Set(
+    [...actionUris].filter((u) => isTrackableHttpUrl(u) && !shouldSkip(u, skipPrefixes)),
+  );
+  if (trackableUris.size === 0) return { messageType, content };
+  const uriMap = await createTrackingMap(db, trackableUris, linkBase, options?.lineAccountId);
+  rewriteActionUris(tree, (u) => {
+    const tracked = uriMap.get(u);
+    if (!tracked) return u;
+    return isAppLinkDomain(u)
+      ? appendOpenExternalBrowser(tracked.trackingUrl)
+      : tracked.trackingUrl;
+  });
+  return { messageType, content: JSON.stringify(tree) };
+}
+
+/** Valid, parseable http(s) URL — safe to hand to `new URL()` downstream */
+function isTrackableHttpUrl(u: string): boolean {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** Walk a Flex JSON tree and visit every action/defaultAction uri (+ altUri.desktop) */
+function visitActionUris(node: unknown, visit: (holder: Record<string, unknown>, key: string) => void): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) visitActionUris(child, visit);
+    return;
+  }
+  const obj = node as Record<string, unknown>;
+  for (const key of ['action', 'defaultAction']) {
+    const a = obj[key] as Record<string, unknown> | undefined;
+    if (a && a.type === 'uri') {
+      if (typeof a.uri === 'string') visit(a, 'uri');
+      // Desktop LINE uses altUri.desktop instead of uri — track it the same way
+      const alt = a.altUri as Record<string, unknown> | undefined;
+      if (alt && typeof alt.desktop === 'string') visit(alt, 'desktop');
+    }
+  }
+  for (const value of Object.values(obj)) visitActionUris(value, visit);
+}
+
+function collectActionUris(node: unknown, out: Set<string>): void {
+  visitActionUris(node, (holder, key) => out.add(holder[key] as string));
+}
+
+function rewriteActionUris(node: unknown, fn: (u: string) => string): void {
+  visitActionUris(node, (holder, key) => {
+    holder[key] = fn(holder[key] as string);
+  });
 }
