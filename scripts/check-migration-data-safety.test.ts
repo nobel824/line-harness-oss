@@ -1,0 +1,106 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { formatFindings, scanDataSafety } from './check-migration-data-safety';
+
+describe('scanDataSafety — 破壊的なデータ操作を検知する', () => {
+  it('flags DELETE FROM', () => {
+    const findings = scanDataSafety(`DELETE FROM chats WHERE id = 1;`);
+    expect(findings.map((f) => f.rule)).toEqual(['DELETE FROM']);
+    expect(findings[0].line).toBe(1);
+  });
+
+  it('flags DROP TABLE / DROP INDEX', () => {
+    expect(scanDataSafety(`DROP TABLE foo;`).map((f) => f.rule)).toEqual(['DROP']);
+    expect(scanDataSafety(`DROP INDEX IF EXISTS idx_foo;`).map((f) => f.rule)).toEqual(['DROP']);
+  });
+
+  it('flags TRUNCATE', () => {
+    expect(scanDataSafety(`TRUNCATE TABLE foo;`).map((f) => f.rule)).toContain('TRUNCATE');
+  });
+
+  it('flags UPDATE ... SET (mass data rewrite)', () => {
+    const findings = scanDataSafety(`UPDATE chats SET status = 'open';`);
+    expect(findings.map((f) => f.rule)).toEqual(['UPDATE ... SET']);
+  });
+
+  it('reports the correct 1-based line number', () => {
+    const sql = ['CREATE TABLE a (id TEXT);', '', 'DELETE FROM a;'].join('\n');
+    expect(scanDataSafety(sql)[0].line).toBe(3);
+  });
+});
+
+describe('scanDataSafety — 安全な migration を誤検知しない', () => {
+  it('passes a purely additive migration', () => {
+    const sql = `
+      ALTER TABLE tracked_links ADD COLUMN short_code TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_x ON tracked_links (short_code) WHERE short_code IS NOT NULL;
+    `;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('does not flag ON DELETE CASCADE (foreign-key clause, not a deletion)', () => {
+    const sql = `CREATE TABLE b (
+      id TEXT PRIMARY KEY,
+      a_id TEXT REFERENCES a(id) ON DELETE CASCADE,
+      c_id TEXT REFERENCES c(id) ON DELETE SET NULL
+    );`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('does not flag INSERT ... ON CONFLICT DO UPDATE SET (upsert, not a mass rewrite)', () => {
+    const sql = `INSERT INTO a (id, n) VALUES ('x', 1)
+                 ON CONFLICT (id) DO UPDATE SET n = excluded.n;`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('ignores destructive keywords inside -- comments', () => {
+    const sql = `-- DELETE FROM chats を過去に行った経緯がある。DROP TABLE も検討した。
+      CREATE TABLE ok (id TEXT);`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('still flags real SQL that follows a comment on the same line', () => {
+    const sql = `DELETE FROM a; -- DROP TABLE b;`;
+    expect(scanDataSafety(sql).map((f) => f.rule)).toEqual(['DELETE FROM']);
+  });
+});
+
+describe('実物の migration に対する挙動', () => {
+  it('flags 048_chats_friend_unique.sql — 本番の chats 行を DELETE する実例', () => {
+    const sql = readFileSync('packages/db/migrations/048_chats_friend_unique.sql', 'utf8');
+    const rules = scanDataSafety(sql).map((f) => f.rule);
+    expect(rules).toContain('DELETE FROM');
+    expect(rules).toContain('UPDATE ... SET');
+    expect(rules).toContain('DROP');
+  });
+
+  // 本体 upstream の 049。まだフォークに存在しない（同期で入ってくる）ため、
+  // ファイル読み込みではなく実物の SQL を写して固定する。
+  it('passes 049_tracked_links_short_code.sql — 本体の新規 migration・純粋な追加のみ', () => {
+    const sql = `-- 049: Short codes for tracked links
+ALTER TABLE tracked_links ADD COLUMN short_code TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_links_short_code
+  ON tracked_links (short_code) WHERE short_code IS NOT NULL;`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('passes 049_webhook_event_dedup.sql — フォーク独自・純粋な追加のみ', () => {
+    const sql = readFileSync('packages/db/migrations/049_webhook_event_dedup.sql', 'utf8');
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+});
+
+describe('formatFindings', () => {
+  it('renders file, line and rule for the PR body', () => {
+    const out = formatFindings([
+      { file: 'packages/db/migrations/048_x.sql', rule: 'DELETE FROM', line: 42, excerpt: 'DELETE FROM chats' },
+    ]);
+    expect(out).toContain('048_x.sql');
+    expect(out).toContain('42');
+    expect(out).toContain('DELETE FROM chats');
+  });
+
+  it('returns an empty string when there are no findings', () => {
+    expect(formatFindings([])).toBe('');
+  });
+});
