@@ -66,12 +66,29 @@ upstream のコミットが 32 件滞留している。ユーザーは「マー�
 | AC1/3/5 | `gh workflow run update-from-upstream.yml` を実際に起動し、`gh run view` で結果確認。今 32 件滞留しているため実物で検証可能 |
 | AC6 | 同期完了後にもう一度 dispatch し、`has_changes=false` で成功終了すること |
 
-## 6. 受入条件（DoD）
+## 6. 受入条件（DoD）— 2026-07-17 完了
 
-- [ ] `pnpm test:scripts` が緑（新規テスト含む）
-- [ ] ワークフローを実起動し、滞留 32 件が main に入り本番デプロイまで到達
-- [ ] 危険 migration 検知のテストが `048` の実物 SQL で発火する
-- [ ] 独立レビュアー（fresh context）の「致命」「重要」指摘が 0
+- [x] `pnpm test:scripts` が緑（66 件 / うちデータ安全検査 29 件）
+- [x] ワークフローを実起動し、滞留 32 件が main に入り本番デプロイまで到達
+      （run 29579524120 でマージ `ac50c8e`、未取り込み upstream 0 件。デプロイは
+      GH_REPO バグ修正後に到達。worker/admin とも success、`/admin/version` 200）
+- [x] 危険 migration 検知のテストが `048` の実物 SQL で発火する
+- [x] 独立レビュアー（fresh context）の「致命」「重要」指摘が 0（2 巡: 致命 2・重要 6 → 全対応）
+- [x] AC6 実証: 再起動して差分ゼロで正常終了（run 29579921018 = success、PR/Issue 作らず）
+- [x] AC7 本番実証: `Applying: 049_tracked_links_short_code.sql` / `Skipped: 049_webhook_event_dedup.sql`
+      = 同番号の 2 migration が共存し、再適用も起きない
+- [x] 通知経路の疎通確認（Issue #17 を作成 → close）
+
+### 実起動で判明し修正した実バグ（2 巡のレビューでは出なかった）
+
+1. **`gh` が本体 Shudesu を既定リポジトリに解決** → `gh workflow run` が 403 で落ち、
+   マージ成功なのにデプロイ不発（= §9 失敗モード #4 の実現）。通知も道連れで失敗。
+   → workflow レベル `env: GH_REPO` で固定（PR #16）。
+2. **フォークは Issues が既定で無効** → 安全網の Issue 通知が動かなかった。
+   → リポジトリ設定で有効化し疎通確認済み。**無効に戻すと通知が死ぬ。**
+
+教訓: コードレビューは静的な欠陥をよく捕まえたが、**環境に起因する欠陥（既定リポジトリの
+解決・リポジトリ設定）は実起動でしか出なかった**。危険 zone の自動化は実起動まで DoD に含める。
 
 ## 7. Out of scope
 
