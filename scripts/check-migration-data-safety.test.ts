@@ -20,7 +20,34 @@ describe('scanDataSafety — 破壊的なデータ操作を検知する', () => 
 
   it('flags UPDATE ... SET (mass data rewrite)', () => {
     const findings = scanDataSafety(`UPDATE chats SET status = 'open';`);
-    expect(findings.map((f) => f.rule)).toEqual(['UPDATE ... SET']);
+    expect(findings.map((f) => f.rule)).toEqual(['UPDATE']);
+  });
+
+  // SQLite は `UPDATE OR IGNORE|REPLACE|ROLLBACK|ABORT|FAIL <table> SET` を許す。
+  // `UPDATE <table> SET` だけを見る実装はこれを素通りさせ、本番データの書き換えが
+  // 無人でデプロイされる。
+  it.each(['IGNORE', 'REPLACE', 'ROLLBACK', 'ABORT', 'FAIL'])(
+    'flags UPDATE OR %s ... SET (SQLite の正規構文・見逃すと致命)',
+    (variant) => {
+      const sql = `UPDATE OR ${variant} chats SET status = 'x' WHERE id = 1;`;
+      expect(scanDataSafety(sql).map((f) => f.rule)).toEqual(['UPDATE']);
+    },
+  );
+
+  it('flags a qualified table name (UPDATE main.chats SET)', () => {
+    expect(scanDataSafety(`UPDATE main.chats SET a = 1;`).map((f) => f.rule)).toEqual(['UPDATE']);
+  });
+
+  it('flags REPLACE INTO (delete + insert disguised as an insert)', () => {
+    expect(scanDataSafety(`REPLACE INTO chats (id) VALUES ('a');`).map((f) => f.rule)).toEqual([
+      'REPLACE INTO',
+    ]);
+  });
+
+  it('flags INSERT OR REPLACE INTO', () => {
+    expect(
+      scanDataSafety(`INSERT OR REPLACE INTO chats (id) VALUES ('a');`).map((f) => f.rule),
+    ).toEqual(['REPLACE INTO']);
   });
 
   it('reports the correct 1-based line number', () => {
@@ -59,6 +86,24 @@ describe('scanDataSafety — 安全な migration を誤検知しない', () => {
     expect(scanDataSafety(sql)).toEqual([]);
   });
 
+  it('ignores destructive keywords inside /* */ block comments', () => {
+    const sql = `/* 経緯:
+       UPDATE chats SET status = 'x'; を検討したが DELETE FROM chats は避けた。
+    */
+    CREATE TABLE ok (id TEXT);`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
+  it('keeps line numbers correct after a multi-line block comment', () => {
+    const sql = ['/* a', 'b', '*/', 'DELETE FROM x;'].join('\n');
+    expect(scanDataSafety(sql)[0].line).toBe(4);
+  });
+
+  it('does not flag identifiers that merely start with a keyword', () => {
+    const sql = `CREATE TABLE updates (id TEXT, updated_at TEXT, deleted_at TEXT);`;
+    expect(scanDataSafety(sql)).toEqual([]);
+  });
+
   it('still flags real SQL that follows a comment on the same line', () => {
     const sql = `DELETE FROM a; -- DROP TABLE b;`;
     expect(scanDataSafety(sql).map((f) => f.rule)).toEqual(['DELETE FROM']);
@@ -70,7 +115,7 @@ describe('実物の migration に対する挙動', () => {
     const sql = readFileSync('packages/db/migrations/048_chats_friend_unique.sql', 'utf8');
     const rules = scanDataSafety(sql).map((f) => f.rule);
     expect(rules).toContain('DELETE FROM');
-    expect(rules).toContain('UPDATE ... SET');
+    expect(rules).toContain('UPDATE');
     expect(rules).toContain('DROP');
   });
 

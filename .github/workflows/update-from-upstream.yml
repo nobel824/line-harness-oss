@@ -9,8 +9,12 @@ name: Update from upstream
 #   無効化している (apps/worker/src/routes/admin-update.ts, docs/wiki/26-Manual-Update.md)。
 #   カスタマイズしているフォークにとっては git 同期だけが正しい。
 #
-# 方針: 綺麗に通るときはデプロイまで完全自動。引っかかったら必ず PR にして人間へ渡す
-#       (silent fail を作らない)。仕様は tasks/requirements-auto-upstream-sync.md。
+# 方針: 綺麗に通るときはデプロイまで完全自動。引っかかったら必ず PR にして人間へ渡す。
+#       どの経路を通っても「黙って死んで誰も気づかない」を作らない — 想定外の失敗は
+#       最後の notify ステップが Issue にする。仕様: tasks/requirements-auto-upstream-sync.md
+#
+# 大きい/上流由来のテキスト (コンフリクト一覧・SQL・CI ログ) は GITHUB_OUTPUT を経由させず
+# ファイルで受け渡す。heredoc の終端衝突とスクリプト展開の両方を避けるため。
 
 on:
   workflow_dispatch:
@@ -20,6 +24,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write # 想定外失敗の通知先
   actions: write # マージ後にデプロイを dispatch するため
 
 concurrency:
@@ -70,9 +75,13 @@ jobs:
             git log --oneline HEAD..upstream/main | head -30
           fi
 
+      # status: clean | resolved | conflict | failed
+      # ステップが想定外に落ちると status は空のまま → decide が 'internal' として扱う。
+      # 「出力が無い = 正常」と解釈させないための sentinel。
       - name: Merge upstream, auto-resolving generated files
         id: merge
         if: steps.detect.outputs.has_changes == 'true'
+        continue-on-error: true
         run: |
           set -uo pipefail
           branch="upstream/update-$(date -u +%Y%m%d-%H%M%S)"
@@ -84,18 +93,24 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           if git merge --no-edit upstream/main; then
-            echo "blocked=" >> "$GITHUB_OUTPUT"
+            echo "status=clean" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           conflicts="$(git diff --name-only --diff-filter=U)"
+          if [ -z "$conflicts" ]; then
+            # マージはコンテンツ衝突以外の理由で失敗している (index が汚れている等)。
+            # 「衝突ファイル 0 件 = 解決すべきものが無い = 成功」と誤読すると、何も
+            # マージされていない木を緑判定して本番に流してしまう。明示的に失敗させる。
+            echo "git merge failed without content conflicts — treating as a hard failure."
+            git merge --abort || true
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "Conflicted files:"
           echo "$conflicts"
-          {
-            echo "conflicts<<CONFLICTS_EOF"
-            echo "$conflicts"
-            echo "CONFLICTS_EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "$conflicts" > /tmp/conflicts.txt
 
           unresolvable=""
           while IFS= read -r f; do
@@ -108,11 +123,11 @@ jobs:
 
           if [ -n "$unresolvable" ]; then
             echo "Conflicts outside the generated-file allowlist: $unresolvable"
-            echo "blocked=conflict" >> "$GITHUB_OUTPUT"
             # コンフリクトマーカーごとコミットして push する。人間が解決するための材料。
             # PR は draft にして誤マージを防ぐ。
             git add -A
             git commit -m "merge upstream/main (CONFLICTS — manual resolution required)"
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -122,17 +137,18 @@ jobs:
             git checkout --theirs -- "$f" 2>/dev/null || git checkout upstream/main -- "$f"
             git add -- "$f"
           done <<< "$conflicts"
-          echo "blocked=" >> "$GITHUB_OUTPUT"
+          echo "status=resolved" >> "$GITHUB_OUTPUT"
 
       - name: Regenerate generated files and complete the merge
         id: regen
-        if: steps.detect.outputs.has_changes == 'true' && steps.merge.outputs.blocked == ''
+        if: steps.merge.outputs.status == 'clean' || steps.merge.outputs.status == 'resolved'
         # 失敗しても job を止めない — decide に理由を届けて PR を作らせるため。
         continue-on-error: true
         run: |
           set -e
           pnpm install --no-frozen-lockfile
           node packages/db/scripts/generate-bootstrap.mjs
+          # shellcheck disable=SC2086  # 複数パスへ意図的に単語分割する
           git add -- $GENERATED_FILES
 
           if [ -f .git/MERGE_HEAD ]; then
@@ -150,131 +166,178 @@ jobs:
 
       - name: Gate — destructive data operations in new migrations
         id: migscan
-        if: steps.detect.outputs.has_changes == 'true' && steps.merge.outputs.blocked == '' && steps.regen.outcome == 'success'
+        if: steps.regen.outcome == 'success'
         continue-on-error: true
         run: |
           set -uo pipefail
-          new="$(git diff --name-only --diff-filter=A "${{ steps.merge.outputs.base }}" HEAD -- packages/db/migrations/ | tr '\n' ' ')"
+          new="$(git diff --name-only --diff-filter=A "${MERGE_BASE}" HEAD -- packages/db/migrations/ | tr '\n' ' ')"
           echo "New migrations: ${new:-（なし）}"
           if [ -z "${new// /}" ]; then
             exit 0
           fi
           # D1 の migration は戻せない (packages/update-engine/src/phases/rollback.ts)。
-          # DELETE/DROP/TRUNCATE/UPDATE を含むものは無人で本番に流さない。
-          report="$(pnpm exec tsx scripts/check-migration-data-safety.ts $new)"
-          status=$?
-          echo "$report"
-          {
-            echo "report<<REPORT_EOF"
-            echo "$report"
-            echo "REPORT_EOF"
-          } >> "$GITHUB_OUTPUT"
-          exit $status
+          # DELETE/DROP/TRUNCATE/UPDATE/REPLACE INTO を含むものは無人で本番に流さない。
+          # shellcheck disable=SC2086  # 複数の migration パスへ意図的に単語分割する
+          pnpm exec tsx scripts/check-migration-data-safety.ts $new | tee /tmp/mig-report.md
+          exit "${PIPESTATUS[0]}"
+        env:
+          MERGE_BASE: ${{ steps.merge.outputs.base }}
 
       - name: CI — typecheck, test, build
         id: ci
-        if: steps.detect.outputs.has_changes == 'true' && steps.merge.outputs.blocked == '' && steps.regen.outcome == 'success'
+        if: steps.regen.outcome == 'success'
         continue-on-error: true
         env:
           VITE_LIFF_ID: ${{ vars.VITE_LIFF_ID }}
           VITE_BOT_BASIC_ID: ${{ vars.VITE_BOT_BASIC_ID }}
           VITE_CALENDAR_CONNECTION_ID: ${{ vars.VITE_CALENDAR_CONNECTION_ID }}
         run: |
-          set -e
-          # worker の tsc は依存を dist 経由で解決するため、先にビルドしないと
-          # stale な .d.ts を見て偽エラーを出す。
-          pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db --filter @line-harness/update-engine build
-          pnpm --filter worker typecheck
-          pnpm --filter worker test
-          pnpm --filter @line-crm/db test
-          pnpm test:scripts
-          pnpm --filter worker build
+          set -o pipefail
+          run_ci() {
+            set -e
+            # worker の tsc は依存を dist 経由で解決するため、先にビルドしないと
+            # stale な .d.ts を見て偽エラーを出す。
+            pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db --filter @line-harness/update-engine build
+            pnpm --filter worker typecheck
+            pnpm --filter worker test
+            pnpm --filter @line-crm/db test
+            pnpm test:scripts
+            pnpm --filter worker build
+          }
+          run_ci 2>&1 | tee /tmp/ci.log
 
       - name: Decide outcome
         id: decide
         if: steps.detect.outputs.has_changes == 'true'
         run: |
           reason=""
-          if [ "${{ steps.merge.outputs.blocked }}" = "conflict" ]; then
-            reason="conflict"
-          elif [ "${{ steps.regen.outcome }}" = "failure" ]; then
-            reason="regen"
-          elif [ "${{ steps.migscan.outcome }}" = "failure" ]; then
-            reason="migration"
-          elif [ "${{ steps.ci.outcome }}" = "failure" ]; then
-            reason="ci"
+          case "${{ steps.merge.outputs.status }}" in
+            clean|resolved) ;;
+            conflict) reason="conflict" ;;
+            failed)   reason="failed" ;;
+            # 空 = merge ステップが想定外に落ちた。正常扱いにはしない。
+            *)        reason="internal" ;;
+          esac
+          if [ -z "$reason" ]; then
+            if [ "${{ steps.regen.outcome }}" != "success" ]; then
+              reason="regen"
+            elif [ "${{ steps.migscan.outcome }}" != "success" ]; then
+              reason="migration"
+            elif [ "${{ steps.ci.outcome }}" != "success" ]; then
+              reason="ci"
+            fi
           fi
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
           echo "Outcome: ${reason:-auto-merge}"
 
       # ── 全部緑 → main へマージして本番デプロイまで自動 ──────────────────
+      # has_changes を再度見るのは必須: decide がスキップされると reason は空文字になり、
+      # 「全部緑」と同じ値になってしまう（スキップ = 成功ではない）。
       - name: Auto-merge to main
-        if: steps.detect.outputs.has_changes == 'true' && steps.decide.outputs.reason == ''
+        if: steps.detect.outputs.has_changes == 'true' && steps.decide.outcome == 'success' && steps.decide.outputs.reason == ''
         run: |
           set -e
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${MERGE_BASE}")" ]; then
+            echo "Nothing was actually merged — refusing to report success."
+            exit 1
+          fi
           # squash ではなく merge commit を push する。squash すると upstream の履歴が
           # 祖先から消え、次回以降の `git merge upstream/main` が毎回全コミットを
           # 再マージしようとして恒久的にコンフリクトする。
           git push origin HEAD:main
-          echo "Merged $(git rev-parse --short "${{ steps.merge.outputs.base }}")..$(git rev-parse --short HEAD) into main."
+          echo "Merged $(git rev-parse --short "${MERGE_BASE}")..$(git rev-parse --short HEAD) into main."
+        env:
+          MERGE_BASE: ${{ steps.merge.outputs.base }}
 
       - name: Trigger production deploys
-        if: steps.detect.outputs.has_changes == 'true' && steps.decide.outputs.reason == ''
+        if: steps.detect.outputs.has_changes == 'true' && steps.decide.outcome == 'success' && steps.decide.outputs.reason == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           # GitHub は GITHUB_TOKEN による push ではワークフローを発火させない (再帰防止)。
-          # 上の push だけではデプロイが走らずコードだけ進んで本番が古いまま残るので、
-          # workflow_dispatch で明示的に起動する。
+          # workflow_dispatch と repository_dispatch だけが例外なので、デプロイは明示起動する。
+          # これが無いとコードだけ main に進んで本番が古いまま取り残される。
           gh workflow run deploy-cloudflare-worker.yml --ref main
           gh workflow run deploy-cloudflare-admin.yml --ref main
           echo "Dispatched worker + admin deploys."
 
       # ── 引っかかった → PR にして人間へ ────────────────────────────────
       - name: Open PR for manual review
-        if: steps.detect.outputs.has_changes == 'true' && steps.decide.outputs.reason != ''
+        if: >-
+          steps.decide.outputs.reason == 'conflict' ||
+          steps.decide.outputs.reason == 'migration' ||
+          steps.decide.outputs.reason == 'ci' ||
+          steps.decide.outputs.reason == 'regen'
         env:
           GH_TOKEN: ${{ github.token }}
           REASON: ${{ steps.decide.outputs.reason }}
-          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
-          MIG_REPORT: ${{ steps.migscan.outputs.report }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          MERGE_BASE: ${{ steps.merge.outputs.base }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -e
-          branch="${{ steps.merge.outputs.branch }}"
-          git push origin "$branch"
+          # regen が commit 到達前に落ちた場合、マージは index に残ったままで未コミット。
+          # そのまま push すると main と同一 commit になり `gh pr create` が
+          # "No commits between" で失敗して PR が 1 つも残らない — 直そうとしている
+          # サイレント失敗そのものになる。ここで必ずコミットしてから push する。
+          if [ -f .git/MERGE_HEAD ]; then
+            git add -A
+            git commit -m "merge upstream/main (automation halted: ${REASON})"
+          fi
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${MERGE_BASE}")" ]; then
+            echo "No commits to put in a PR — escalating to the notifier."
+            exit 1
+          fi
+          git push origin "$BRANCH"
 
           draft="--draft"
           case "$REASON" in
             conflict)
               title="⚠️ upstream 同期: コンフリクトのため手動対応が必要"
-              summary="自動マージが**生成ファイル以外**で衝突しました。どちらを採るかの判断が要るため自動適用を止めています。"
-              detail="**コンフリクトしたファイル**\n\`\`\`\n${CONFLICTS}\n\`\`\`\nこのブランチにはコンフリクトマーカーがそのまま入っています（解決の材料）。解決してから通常 PR に切り替えてください。"
+              summary="自動マージが**生成ファイル以外**で衝突しました。どちらを採るかの判断が要るため自動適用を止めています。このブランチにはコンフリクトマーカーがそのまま入っています（解決の材料）。"
+              body_file=/tmp/conflicts.txt
+              body_title="コンフリクトしたファイル"
+              fence="text"
               ;;
             migration)
               title="🛑 upstream 同期: 本番データを操作する migration を含みます"
               summary="新しい migration に**戻せない**データ操作が含まれています。内容を確認してからマージしてください。マージすれば通常どおりデプロイされます。"
-              detail="${MIG_REPORT}\n\n> D1 の migration はロールバックできません（\`packages/update-engine/src/phases/rollback.ts\`）。"
+              body_file=/tmp/mig-report.md
+              body_title="検出された操作"
+              fence=""
               draft=""
               ;;
             ci)
               title="❌ upstream 同期: CI が失敗"
               summary="マージ自体は成功しましたが、typecheck / test / build のいずれかが失敗したため自動適用を止めています。"
-              detail="失敗の詳細はワークフローログを参照してください。"
+              body_file=/tmp/ci.log
+              body_title="CI ログ（末尾）"
+              fence="text"
               ;;
             regen)
               title="❌ upstream 同期: 生成ファイルの再生成に失敗"
-              summary="生成ファイルの自動解決に失敗しました。"
-              detail="失敗の詳細はワークフローログを参照してください。"
+              summary="生成ファイルの自動解決に失敗しました。マージは未完成のままコミットしてあります。"
+              body_file=/tmp/ci.log
+              body_title="ログ（末尾）"
+              fence="text"
               ;;
           esac
 
           {
             echo "$summary"
             echo
-            printf '%b\n' "$detail"
-            echo
+            if [ -s "$body_file" ]; then
+              echo "### $body_title"
+              if [ -n "$fence" ]; then
+                echo '```'"$fence"
+                tail -c 4000 "$body_file"
+                echo '```'
+              else
+                cat "$body_file"
+              fi
+              echo
+            fi
             echo "---"
             echo "- 実行ログ: $RUN_URL"
             echo "- 仕様: \`tasks/requirements-auto-upstream-sync.md\`"
@@ -284,10 +347,41 @@ jobs:
           gh pr create \
             --repo "${{ github.repository }}" \
             --base main \
-            --head "$branch" \
+            --head "$BRANCH" \
             --title "$title" \
             --body-file /tmp/pr-body.md \
             $draft
+
+      # ── どの経路でも拾えなかった失敗 → Issue で必ず可視化 ────────────────
+      # 元インシデントは「毎日失敗しているのに誰も気づかない」だった。赤い X が
+      # Actions タブに積まれるだけでは気づけないことが実証済みなので、最後に必ず鳴らす。
+      - name: Notify on unexpected failure
+        if: failure() || steps.decide.outputs.reason == 'failed' || steps.decide.outputs.reason == 'internal'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          label="upstream-sync-failure"
+          gh label create "$label" --color B60205 --description "upstream 自動同期の失敗" 2>/dev/null || true
+
+          # 行頭のインデントを入れないこと — Markdown が字下げをコードブロックとして拾う。
+          {
+            echo "upstream の自動同期が失敗しました（理由: \`${REASON:-unexpected}\`）。自動での本番反映は行われていません。"
+            echo
+            echo "- 実行ログ: $RUN_URL"
+            echo "- 仕様: \`tasks/requirements-auto-upstream-sync.md\`"
+            echo
+            echo "同じ失敗が続く間、この Issue にコメントが追記されます。直ったら close してください。"
+          } > /tmp/issue-body.md
+
+          existing="$(gh issue list --label "$label" --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/issue-body.md
+          else
+            gh issue create --title "🚨 upstream 自動同期が失敗しています" --label "$label" --body-file /tmp/issue-body.md
+          fi
 
       - name: No upstream changes
         if: steps.detect.outputs.has_changes == 'false'

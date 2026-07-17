@@ -44,6 +44,8 @@ interface Rule {
   pattern: RegExp;
 }
 
+// Bias: a false positive costs one PR to review; a false negative costs
+// irreversible production data. Every rule errs toward over-matching.
 const RULES: Rule[] = [
   {
     rule: 'DELETE FROM',
@@ -60,20 +62,36 @@ const RULES: Rule[] = [
     pattern: /\bTRUNCATE\b/gi,
   },
   {
-    rule: 'UPDATE ... SET',
-    // A mass rewrite of existing rows. The negative lookahead lets
-    // `INSERT ... ON CONFLICT DO UPDATE SET` (an upsert) through: there the
-    // token right after UPDATE is SET itself, with no table name between them.
-    pattern: /\bUPDATE\s+(?!SET\b)\S+\s+SET\b/gi,
+    rule: 'UPDATE',
+    // Any rewrite of existing rows. Deliberately NOT `UPDATE <table> SET`:
+    // SQLite also accepts `UPDATE OR IGNORE|REPLACE|ROLLBACK|ABORT|FAIL <table>
+    // SET ...` (https://www.sqlite.org/lang_update.html), which that narrower
+    // shape silently misses.
+    //
+    // The lookbehind lets `INSERT ... ON CONFLICT DO UPDATE SET` (an upsert on
+    // rows this migration is itself inserting) through — the only UPDATE spelling
+    // that is not a mass rewrite.
+    pattern: /(?<!\bDO\s{1,8})\bUPDATE\s+(?:OR\s+(?:IGNORE|REPLACE|ROLLBACK|ABORT|FAIL)\s+)?[^\s;]+/gi,
+  },
+  {
+    rule: 'REPLACE INTO',
+    // `REPLACE INTO` / `INSERT OR REPLACE INTO` delete the conflicting row and
+    // insert a new one — a data loss path that reads like an insert.
+    pattern: /\bREPLACE\s+INTO\b/gi,
   },
 ];
 
 /**
- * Blank out `--` line comments while preserving every character position, so
- * match indices still map onto the original text for line numbering.
+ * Blank out comments while preserving every character position (and every
+ * newline), so match indices still map onto the original text for line
+ * numbering. Both `/* ... *\/` blocks and `--` lines are handled: prose in a
+ * migration header routinely names the very operations we scan for
+ * ("previously we had to DELETE FROM chats..."), and flagging that would train
+ * the operator to ignore the gate.
  */
-function blankLineComments(sql: string): string {
-  return sql
+function blankComments(sql: string): string {
+  const blockBlanked = sql.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  return blockBlanked
     .split('\n')
     .map((line) => {
       const idx = line.indexOf('--');
@@ -92,7 +110,7 @@ function lineAt(text: string, index: number): number {
 
 /** Scan one migration's SQL. Returns findings ordered by position in the file. */
 export function scanDataSafety(sql: string): Finding[] {
-  const stripped = blankLineComments(sql);
+  const stripped = blankComments(sql);
   const found: (Finding & { index: number })[] = [];
 
   for (const { rule, pattern } of RULES) {
