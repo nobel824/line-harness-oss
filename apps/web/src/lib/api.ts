@@ -119,6 +119,12 @@ export interface FormRecord {
   updatedAt: string
   lastSubmittedAt: string | null
   usedByAccounts: FormUsedByAccount[]
+  /** 回答後に付与するタグ。未設定は null。 */
+  onSubmitTagId: string | null
+  /** 回答後に送るメッセージの種別。未設定は null。 */
+  onSubmitMessageType: 'text' | 'flex' | null
+  /** `onSubmitMessageType` が text/flex のときの本文（flex は JSON 文字列）。未設定は null。 */
+  onSubmitMessageContent: string | null
 }
 
 export type FormCreateInput = {
@@ -127,11 +133,20 @@ export type FormCreateInput = {
   /** worker が stringify するため配列のまま送る。 */
   fields?: FormField[]
   saveToMetadata?: boolean
+  /** 回答後に付けるタグ。`null` で明示クリア、`undefined` は据え置き（PUT の部分更新）。 */
+  onSubmitTagId?: string | null
+  /** 回答後に送るメッセージの種別。`null` で明示クリア、`undefined` は据え置き。 */
+  onSubmitMessageType?: 'text' | 'flex' | null
+  /** 上記メッセージの本文。`null` で明示クリア、`undefined` は据え置き。 */
+  onSubmitMessageContent?: string | null
 }
 
 /**
- * `onSubmitTagId` 等の送信後設定は意図的にここに含めない。
- * PUT は undefined のキーを更新スキップする部分更新なので、含めなければ既存値が保全される。
+ * `onSubmitScenarioId` / webhook 系（onSubmitWebhookUrl 等）は意図的にここに含めない
+ * （UI が無いため）。PUT は undefined のキーを更新スキップする部分更新なので、
+ * 含めなければ既存値が保全される。
+ * `onSubmitTagId` / `onSubmitMessageType` / `onSubmitMessageContent` は編集UIがあるため
+ * `FormCreateInput` 側に含めている（上記参照）。
  */
 export type FormUpdateInput = FormCreateInput & {
   isActive?: boolean
