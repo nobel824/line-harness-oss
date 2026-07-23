@@ -37,6 +37,11 @@ function parseJsonArray(s: unknown): string[] | null {
   }
 }
 
+function hasSegmentConditions(row: DbBroadcast): boolean {
+  const segmentConditions = (row as unknown as Record<string, unknown>).segment_conditions;
+  return typeof segmentConditions === 'string' && segmentConditions.trim() !== '';
+}
+
 function serializeBroadcast(row: DbBroadcast) {
   const r = row as unknown as Record<string, unknown>;
   return {
@@ -57,6 +62,7 @@ function serializeBroadcast(row: DbBroadcast) {
     accountIds: parseJsonArray(r.account_ids),
     dedupPriority: parseJsonArray(r.dedup_priority),
     failedAccountIds: parseJsonArray(r.failed_account_ids),
+    segmentConditions: r.segment_conditions ?? null,
     // 046 以前の行/未マイグレーション環境では undefined → 従来挙動 (ON) 扱い
     trackLinks: row.track_links === undefined ? true : row.track_links !== 0,
     createdAt: row.created_at,
@@ -131,6 +137,23 @@ broadcasts.get('/api/broadcasts/:id/preview-count', async (c) => {
       }
       count = active;
       perAccount = breakdown;
+    } else if (broadcast.target_type === 'all' && hasSegmentConditions(broadcast)) {
+      const { buildSegmentQuery } = await import('../services/segment-query.js');
+      const segmentConditions = raw.segment_conditions as string;
+      const condition = JSON.parse(segmentConditions) as SegmentCondition;
+      const { sql, bindings } = buildSegmentQuery(condition);
+
+      // キュー送信 (processQueuedBroadcasts) と同じ順序で account filter を
+      // 付与する。これで preview と実送信の対象人数を一致させる。
+      let countSql = sql.replace(/^SELECT f\.id, f\.line_user_id FROM/, 'SELECT COUNT(*) AS cnt FROM');
+      const countBindings = [...bindings];
+      const accountId = (raw.line_account_id as string | null) || null;
+      if (accountId) {
+        countSql = countSql.replace('WHERE', 'WHERE f.line_account_id = ? AND');
+        countBindings.unshift(accountId);
+      }
+      const row = await c.env.DB.prepare(countSql).bind(...countBindings).first<{ cnt: number }>();
+      count = row?.cnt ?? 0;
     } else if (broadcast.target_type === 'tag' && broadcast.target_tag_id) {
       // 注: ここは inline send パス (broadcast.ts:61 getFriendsByTag) が
       // line_account_id でフィルタしないので、preview もアカウント横断で数える。
@@ -353,6 +376,7 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
       targetType?: BroadcastTargetType;
       targetTagId?: string | null;
       scheduledAt?: string | null;
+      segmentConditions?: string | null;
       trackLinks?: boolean;
     }>();
 
@@ -369,6 +393,7 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
       target_type: body.targetType,
       target_tag_id: body.targetTagId,
       scheduled_at: body.scheduledAt,
+      ...(body.segmentConditions !== undefined ? { segment_conditions: body.segmentConditions } : {}),
       ...(body.trackLinks !== undefined ? { track_links: body.trackLinks ? 1 : 0 } : {}),
       ...(statusUpdate !== undefined ? { status: statusUpdate } : {}),
     });
@@ -564,6 +589,23 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
         `UPDATE broadcasts SET status = ? WHERE id = ? AND status = 'sending'`
       ).bind(claimedStatus, id).run();
       throw err;
+    }
+
+    if (existing.target_type === 'all' && hasSegmentConditions(existing)) {
+      // processBroadcastSend の segment ゲートで inline 送信を避けた配信を、
+      // cron を待たずにキュー処理へ渡す。ExecutionContext がないテスト等では
+      // cron フォールバックに任せる。
+      try {
+        const ctx = c.executionCtx as ExecutionContext;
+        const defaultClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+        ctx.waitUntil(
+          processQueuedBroadcasts(c.env.DB, defaultClient, c.env.WORKER_URL).catch((err) => {
+            console.error('[all-segment] background queue processing failed:', err);
+          }),
+        );
+      } catch (kickErr) {
+        console.warn('[all-segment] waitUntil unavailable, falling back to cron:', kickErr);
+      }
     }
 
     const result = await getBroadcastById(c.env.DB, id);
