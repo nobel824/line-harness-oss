@@ -98,3 +98,13 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
 
   return { sql, bindings }
 }
+
+/**
+ * buildSegmentQuery が返す SELECT を COUNT(*) クエリに変換する。
+ * 先頭の既知プレフィックスにアンカーして置換する。`SELECT .+ FROM` の
+ * 貪欲マッチだと tag_exists/tag_not_exists のサブクエリ側 `FROM friend_tags`
+ * まで飲み込み SQL が壊れるため（そのバグをこのヘルパで防ぐ）。
+ */
+export function toSegmentCountSql(selectSql: string): string {
+  return selectSql.replace(/^SELECT f\.id, f\.line_user_id FROM/, 'SELECT COUNT(*) as count FROM')
+}

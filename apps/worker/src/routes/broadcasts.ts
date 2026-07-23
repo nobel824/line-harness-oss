@@ -946,7 +946,7 @@ broadcasts.get('/api/broadcasts/:id/progress', async (c) => {
 broadcasts.post('/api/segments/count', async (c) => {
   const body = await c.req.json<{ conditions: unknown; accountId?: string }>();
   try {
-    const { buildSegmentQuery } = await import('../services/segment-query.js');
+    const { buildSegmentQuery, toSegmentCountSql } = await import('../services/segment-query.js');
     const { sql, bindings } = buildSegmentQuery(body.conditions as SegmentCondition);
 
     let accountSql = sql;
@@ -956,7 +956,7 @@ broadcasts.post('/api/segments/count', async (c) => {
       accountBindings.unshift(body.accountId);
     }
 
-    const countSql = accountSql.replace(/^SELECT .+ FROM/, 'SELECT COUNT(*) as count FROM');
+    const countSql = toSegmentCountSql(accountSql);
     const result = await c.env.DB.prepare(countSql).bind(...accountBindings).first<{ count: number }>();
 
     return c.json({ success: true, count: result?.count ?? 0 });
