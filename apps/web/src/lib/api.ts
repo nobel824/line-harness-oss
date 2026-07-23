@@ -69,6 +69,7 @@ export type ApiBroadcast = Omit<Broadcast, 'targetType'> & {
   dedupPriority: string[] | null;
   failedAccountIds: string[] | null;
   trackLinks: boolean;
+  segmentConditions?: string | null;
 };
 
 /** Question type for `/forms` fields — matches the worker/client submission consumers. */
@@ -415,6 +416,7 @@ export const api = {
         targetType?: ApiBroadcast['targetType']
         targetTagId?: string | null
         scheduledAt?: string | null
+        segmentConditions?: string | null
         trackLinks?: boolean
       }
     ) =>

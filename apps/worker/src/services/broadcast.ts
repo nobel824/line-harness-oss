@@ -56,9 +56,22 @@ export async function processBroadcastSend(
     return (await getBroadcastById(db, broadcastId))!;
   }
 
+  const raw = broadcast as unknown as Record<string, unknown>;
+  const segmentConditions = raw.segment_conditions;
+  if (
+    broadcast.target_type === 'all' &&
+    typeof segmentConditions === 'string' &&
+    segmentConditions.trim() !== ''
+  ) {
+    // all + segment は inline の broadcast API を使わず、既に sending/offset=0
+    // の状態でキュー処理に委譲する。tag + segment は従来どおり inline/queue の
+    // tag 経路を使うため、このゲートの対象外。
+    return broadcast;
+  }
+
   // Auto-wrap URLs with tracking links (text with URLs → Flex with button)
   // track_links=0 の broadcast は明示的に短縮 OFF (URL をそのまま送る)。
-  const broadcastAccountId = (broadcast as unknown as Record<string, unknown>).line_account_id as string | null;
+  const broadcastAccountId = raw.line_account_id as string | null;
   let finalType: string = broadcast.message_type;
   let finalContent = broadcast.message_content;
   if (workerUrl && broadcast.track_links !== 0) {

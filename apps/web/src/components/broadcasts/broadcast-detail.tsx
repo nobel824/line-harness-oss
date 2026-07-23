@@ -264,7 +264,7 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
       </div>
 
       {/* Segment Builder */}
-      {broadcast.status === 'draft' && (
+      {broadcast.status === 'draft' && broadcast.targetType === 'all' && (
         <div className="mb-4">
           {!showSegmentBuilder ? (
             <button
@@ -278,7 +278,7 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
               tags={tags}
               accountId={accountId}
               onApply={async (conditions) => {
-                await api.broadcasts.update(id, { segmentConditions: JSON.stringify(conditions) } as unknown as Parameters<typeof api.broadcasts.update>[1])
+                await api.broadcasts.update(id, { segmentConditions: JSON.stringify(conditions) })
                 setShowSegmentBuilder(false)
                 load()
               }}
@@ -469,14 +469,21 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
 
       {/* Send Button */}
       {broadcast.status === 'draft' && (
-        <button
-          onClick={() => setShowConfirm(true)}
-          disabled={sending}
-          className="w-full px-4 py-3 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-          style={{ backgroundColor: '#06C755' }}
-        >
-          {sending ? '送信中...' : `この配信を送信する${targetCount != null ? ` (${targetCount.toLocaleString('ja-JP')}人)` : ''}`}
-        </button>
+        <>
+          {broadcast.targetType === 'all' && broadcast.segmentConditions != null && (
+            <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm">
+              除外条件が設定されています
+            </div>
+          )}
+          <button
+            onClick={() => setShowConfirm(true)}
+            disabled={sending}
+            className="w-full px-4 py-3 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
+            style={{ backgroundColor: '#06C755' }}
+          >
+            {sending ? '送信中...' : `この配信を送信する${targetCount != null ? ` (${targetCount.toLocaleString('ja-JP')}人)` : ''}`}
+          </button>
+        </>
       )}
 
       {/* Confirm Dialog */}

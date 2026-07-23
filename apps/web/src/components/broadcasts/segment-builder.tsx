@@ -22,6 +22,15 @@ interface SegmentBuilderProps {
   onCancel: () => void
 }
 
+function isValidRule(rule: SegmentRule): boolean {
+  if (rule.type === 'is_following') return true
+  if (typeof rule.value === 'string') return rule.value !== ''
+  if (typeof rule.value === 'object' && rule.value !== null) {
+    return (rule.value as { key: string }).key !== ''
+  }
+  return false
+}
+
 const ruleTypeLabels: Record<SegmentRule['type'], string> = {
   tag_exists: 'タグあり',
   tag_not_exists: 'タグなし',
@@ -35,19 +44,15 @@ export default function SegmentBuilder({ tags, accountId, initialConditions, onA
   const [rules, setRules] = useState<SegmentRule[]>(initialConditions?.rules ?? [{ type: 'tag_exists', value: '' }])
   const [count, setCount] = useState<number | null>(null)
   const [counting, setCounting] = useState(false)
+  const validRules = rules.filter(isValidRule)
 
   const fetchCount = useCallback(async () => {
-    const validRules = rules.filter(r => {
-      if (r.type === 'is_following') return true
-      if (typeof r.value === 'string') return r.value !== ''
-      if (typeof r.value === 'object' && r.value !== null) return (r.value as { key: string }).key !== ''
-      return false
-    })
-    if (validRules.length === 0) { setCount(null); return }
+    const rulesForCount = rules.filter(isValidRule)
+    if (rulesForCount.length === 0) { setCount(null); return }
 
     setCounting(true)
     try {
-      const res = await api.segments.count({ operator, rules: validRules }, accountId ?? undefined)
+      const res = await api.segments.count({ operator, rules: rulesForCount }, accountId ?? undefined)
       if (res.success) setCount(res.count ?? 0)
     } catch { /* ignore */ }
     finally { setCounting(false) }
@@ -149,7 +154,10 @@ export default function SegmentBuilder({ tags, accountId, initialConditions, onA
 
       <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200">
         <button
-          onClick={() => onApply({ operator, rules })}
+          onClick={() => {
+            if (validRules.length > 0) onApply({ operator, rules: validRules })
+          }}
+          disabled={validRules.length === 0}
           className="px-3 py-1.5 min-h-[44px] text-xs font-medium text-white rounded-md"
           style={{ backgroundColor: '#06C755' }}
         >

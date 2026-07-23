@@ -21,6 +21,7 @@ export interface Broadcast {
   failed_account_ids: string | null;
   dedup_progress: string | null;
   batch_lock_at: string | null;
+  segment_conditions: string | null;
   track_links: number;
 }
 
@@ -131,6 +132,7 @@ export type UpdateBroadcastInput = Partial<
     | 'target_tag_id'
     | 'status'
     | 'scheduled_at'
+    | 'segment_conditions'
     | 'track_links'
   >
 >;
@@ -170,6 +172,10 @@ export async function updateBroadcast(
   if (updates.scheduled_at !== undefined) {
     fields.push('scheduled_at = ?');
     values.push(updates.scheduled_at);
+  }
+  if (updates.segment_conditions !== undefined) {
+    fields.push('segment_conditions = ?');
+    values.push(updates.segment_conditions);
   }
   if (updates.track_links !== undefined) {
     fields.push('track_links = ?');
