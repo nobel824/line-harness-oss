@@ -17,7 +17,7 @@
 
 | 事実 | 根拠 |
 |---|---|
-| 詳細画面でセグメント条件 `tag_not_exists`（タグなし）を保存はできる | `apps/web/src/components/broadcasts/broadcast-detail.tsx:277`（`SegmentBuilder`→`api.broadcasts.update`） |
+| **詳細画面のSegmentBuilderは条件を保存できない**（`update` に投げるが PUT が捨てる） | `broadcast-detail.tsx:280` は `api.broadcasts.update(id, {segmentConditions} as unknown as ...)` とキャストで送るが、PUT `/api/broadcasts/:id`（`broadcasts.ts:374`）も `updateBroadcast`（`packages/db/src/broadcasts.ts:124` `UpdateBroadcastInput`）も `segment_conditions` を受け取らず**サイレント破棄**。DBは常にNULL |
 | 手動送信は `/send`→`processBroadcastSend` を呼び、`target_type='all'` は broadcast API で全員送信（segmentを無視） | `apps/worker/src/services/broadcast.ts:89-95` |
 | **予約送信も** `processScheduledBroadcasts`→`processBroadcastSend` で同じく全員送信 | `apps/worker/src/services/broadcast.ts:197`（`processScheduledBroadcasts`）|
 | 除外を効かせる `/send-segment` は UI から呼ばれていない | `sendSegment` は `apps/web/src/lib/api.ts:458` に定義のみ |
@@ -70,15 +70,37 @@
      （可能なら共通ヘルパに切り出す）。
    - 効果: 確認モーダルと送信ボタンの「対象 X人」を除外後の人数に一致させる。
 
-### Web: `apps/web/src`
+### 書き込み経路: `segment_conditions` を保存できるようにする（★CRITICAL・当初漏れ）
+
+このユニットが無いと、SegmentBuilder で保存した除外条件が DB に永続化されず、機能全体が
+UI から発火しない（サーバー側ロジックが正しくても到達不能）。
+
+A. **`packages/db/src/broadcasts.ts`**
+   - `UpdateBroadcastInput` に `segment_conditions`（`string | null`）を追加。
+     `Broadcast` 型にキーが無ければ型を拡張して対応。
+   - `updateBroadcast` に `if (updates.segment_conditions !== undefined) { fields.push('segment_conditions = ?'); values.push(updates.segment_conditions); }` を追加。
+   - db テストは `packages/db/test/` 配下に置く（この repo の vitest include 規約）。
+B. **`apps/worker/src/routes/broadcasts.ts` / PUT `/api/broadcasts/:id`**
+   - body 型に `segmentConditions?: string | null` を追加し、`updateBroadcast` 呼び出しに
+     `...(body.segmentConditions !== undefined ? { segment_conditions: body.segmentConditions } : {})` を渡す。
+C. **`apps/web/src/lib/api.ts` / `broadcasts.update`**
+   - 引数型に `segmentConditions?: string | null` を追加。
+D. **`apps/web/src/components/broadcasts/broadcast-detail.tsx` / `onApply`**
+   - `as unknown as Parameters<...>` のキャストを外し、素直に
+     `api.broadcasts.update(id, { segmentConditions: JSON.stringify(conditions) })` を呼ぶ。
+E. **`apps/web/src/components/broadcasts/segment-builder.tsx`（過送信ガード）**
+   - 「適用」時に**有効な rule（値が入っているもの）を1件以上要求**する。空 rules や値未入力の
+     rule のまま保存させない（保存前に `validRules` でフィルタし、0件なら適用不可）。
+
+### Web: `apps/web/src`（表示・型）
 
 5. **`routes/broadcasts.ts` / `serializeBroadcast`（worker）+ `lib/api.ts` / `ApiBroadcast`（web）**
    - serialize に `segmentConditions: r.segment_conditions ?? null`（生JSON文字列のまま）を追加。
    - `ApiBroadcast` 型に `segmentConditions?: string | null` を追加。
 
 6. **`components/broadcasts/broadcast-detail.tsx`（表示のみ・送信分岐は変更しない）**
-   - `broadcast.segmentConditions` が非nullなら「**除外条件が設定されています**」を送信前に明示表示
-     （誤送信防止。確認モーダルの人数は #4 で除外後になる）。
+   - `broadcast.segmentConditions` が非null **かつ `targetType==='all'`** なら
+     「**除外条件が設定されています**」を送信前に明示表示（誤送信防止。人数は #4 で除外後）。
    - `handleSend` は従来どおり `api.broadcasts.send(id)` のまま（サーバー側ゲートで塞ぐため振り分け不要）。
    - **SegmentBuilder（「セグメント条件を編集」）は `target_type='all'` のときだけ表示**する
      （tag×除外の誤設定を防ぐ）。生JSON文字列を `initialConditions` に渡さない（編集は新規に開く）。
@@ -88,6 +110,11 @@
 7. **`services/segment-query.test.ts`（新規）**
    - `buildSegmentQuery` が常に `f.is_following = 1` を含む／clauses 空でも同様／`tag_not_exists` が
      `NOT EXISTS (... friend_tags ...)` を生成すること。
+
+8a. **書き込み経路テスト（★必須・当初漏れの回帰ガード）**
+   - `packages/db/test/`: `updateBroadcast` に `segment_conditions` を渡すと DB に永続化される。
+   - worker ルートテスト: PUT `/api/broadcasts/:id` に `segmentConditions` を送ると保存され、
+     `getBroadcastById` / serialize で読み出せる（UI保存フローを endpoint 経由で exercise）。
 
 8. **送信の統合テスト（既存に追記）**
    - `target_type='all'` + `segment_conditions`(tag_not_exists) の手動 `/send`:
