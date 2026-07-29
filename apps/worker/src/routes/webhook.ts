@@ -8,15 +8,9 @@ import {
   getFriendByLineUserId,
   getScenarios,
   enrollFriendInScenario,
-  getScenarioSteps,
-  advanceFriendScenario,
-  completeFriendScenario,
   upsertChatOnMessage,
   getLineAccounts,
   jstNow,
-  computeNextDeliveryAt,
-  resolveStepContent,
-  addTagToFriend,
   getEntryRouteByRefCode,
   getMessageTemplateById,
   claimWebhookEvent,
@@ -25,6 +19,7 @@ import {
 import type { EntryRoute, Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
+import { pushImmediateFirstStep } from '../services/immediate-first-step.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -288,6 +283,7 @@ export async function handleEvent(
           const friendScenario = await enrollFriendInScenario(db, friend.id, scenario.id);
           if (!friendScenario) continue; // already enrolled
 
+<<<<<<< HEAD
             // Immediate delivery: scenario.delivery_mode を踏まえて step1 が「now 以前」に
             // スケジュールされる場合のみ replyMessage で即時送信する。
             // - relative + delay_minutes=0 → 即時
@@ -359,6 +355,29 @@ export async function handleEvent(
                 console.error('Failed immediate delivery for scenario', scenario.id, err);
               }
             }
+=======
+          // Immediate delivery: step1 が「now 以前」にスケジュールされる場合のみ
+          // replyMessage で即時送信する (reply token は無料・push 枠を消費しない)。
+          // - relative + delay_minutes=0 → 即時
+          // - elapsed + offset_days=0 + offset_minutes=0 → 即時
+          // - absolute_time で過去時刻 → computeNextDeliveryAt が now に clamp するので即時
+          // reply 失敗時 (2つ目のシナリオで token 消費済み等) は claim が解放され
+          // cron が push で配信する。
+          // skipCooldown: 60秒以内の再フォロー (前の enrollment が completed 済み)
+          // でも必ず welcome を返す — 旧 webhook 実装のセマンティクスを維持。
+          const sent = await pushImmediateFirstStep(
+            db,
+            friend.id,
+            scenario.id,
+            { defaultAccessToken: lineAccessToken, workerUrl },
+            {
+              enrollment: friendScenario,
+              reply: { client: lineClient, replyToken: event.replyToken },
+              skipCooldown: true,
+            },
+          );
+          if (sent) console.log(`Immediate delivery: sent scenario ${scenario.id} step 1 to ${userId}`);
+>>>>>>> upstream/main
         } catch (err) {
           console.error('Failed to enroll friend in scenario', scenario.id, err);
         }
@@ -381,11 +400,25 @@ export async function handleEvent(
         }
       }
 
-      // Dedicated scenario enrollment from referral link
+      // Dedicated scenario enrollment from referral link. A delay-0 first
+      // step is pushed immediately (same instant-welcome semantics as
+      // friend_add / tag_added enrollments — previously this path always
+      // waited for the next cron tick). pushMessage, not reply: the reply
+      // token may already be consumed by an account friend_add scenario
+      // above, and the intro push on this path uses pushMessage too.
       if (referralRoute.scenario_id) {
         try {
-          await enrollFriendInScenario(db, friend.id, referralRoute.scenario_id);
+          const enrollment = await enrollFriendInScenario(db, friend.id, referralRoute.scenario_id);
           console.log(`[follow] referral scenario enrolled scenario=${referralRoute.scenario_id}`);
+          if (enrollment) {
+            await pushImmediateFirstStep(
+              db,
+              friend.id,
+              referralRoute.scenario_id,
+              { defaultAccessToken: lineAccessToken, workerUrl },
+              { enrollment },
+            );
+          }
         } catch (err) {
           console.error('[follow] referral scenario enrollment failed', err);
         }
