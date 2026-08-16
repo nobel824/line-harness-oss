@@ -115,9 +115,61 @@ upstream のコミットが 32 件滞留している。ユーザーは「マー�
 | 4 | GITHUB_TOKEN の push でデプロイが発火せず、コードだけ進んで本番が古いまま | **AC1 で明示 dispatch**（GitHub は GITHUB_TOKEN 由来の push でワークフローを起動しない仕様） |
 | 5 | CI 緑を騙るためテストが書き換えられる | 本 workflow はテストを実行するだけで改変しない |
 | 6 | ワークフローが毎日失敗し続けても誰も気づかない | 失敗は必ず PR として残す（非機能要件） |
+| 7 | **本体が workflow ファイルを変更した回に push が拒否され、PR すら作られない** | **2026-08-16 に実際に発生**（下記「同期用 PAT」）。`UPSTREAM_SYNC_TOKEN` で解消 |
+| 8 | PAT の期限切れで 7 が再発する | 残り 30 日で Issue を 1 度立てる（`Warn before the sync PAT expires`） |
+| 9 | PAT push で deploy が自動発火し、明示 dispatch と二重にデプロイされる | dispatch は PAT 未設定時のみ実行。二重適用は D1 migration の競合になる |
 
 ## 10. [ASSUMPTION]
 
 - `gh workflow run`（workflow_dispatch）は `GITHUB_TOKEN` でも発火する。
   **検証方法**: AC1 の実起動でデプロイ run が生成されるかを `gh run list` で確認。
   発火しない場合は PAT（`secrets.DEPLOY_DISPATCH_TOKEN`）へ切り替える。
+  → **2026-08-16 に検証済み・成立**（`gh workflow run` は GITHUB_TOKEN で発火した）。
+
+## 11. 同期用 PAT（`UPSTREAM_SYNC_TOKEN`）
+
+### なぜ要るか
+
+本体が `.github/workflows/*` を変更した回、`GITHUB_TOKEN` での push は
+
+```
+! [remote rejected] ... (refusing to allow a GitHub App to create or update
+  workflow `.github/workflows/deploy-cloudflare-admin.yml` without `workflows` permission)
+```
+
+で拒否される。`permissions: contents: write` を付けても効かない — GitHub App トークンに
+workflow 権限を与える手段が無いため。この経路では **draft PR すら作られず**、Issue に
+コメントが積まれるだけになる。2026-08-01〜08-16 の 17 日連続でこの状態になり、本体から
+40 コミット遅れた（PR #25 で手動同期）。
+
+### 発行手順
+
+1. https://github.com/settings/personal-access-tokens → **Fine-grained personal access token**
+2. Repository access: **Only select repositories** → `nobel824/line-harness-oss` だけ
+3. Repository permissions:
+   - **Contents**: Read and write（push）
+   - **Workflows**: Read and write ← **これが本題**
+   - **Pull requests**: Read and write（PR 作成）
+   - **Issues**: Read and write（失敗通知・期限警告）
+4. Expiration: 1 年（無期限も可。期限を付けた場合は残り 30 日で Issue が立つ）
+5. リポジトリの Settings → Secrets and variables → Actions → **New repository secret**
+   - Name: `UPSTREAM_SYNC_TOKEN`
+   - Secret: 発行したトークン
+
+### 挙動の違い（設定の有無で変わる）
+
+| | PAT あり | PAT なし（従来） |
+|---|---|---|
+| workflow ファイルを含む同期 | 通る | **push 拒否 → 同期が止まる** |
+| main への push | PAT | GITHUB_TOKEN |
+| deploy の起動 | `push: branches: [main]` が自動発火 | `gh workflow run` で明示 dispatch |
+| 期限切れ警告 | 残り 30 日で Issue | 対象外 |
+
+**PAT で push すると deploy が自動発火する**ため、明示 dispatch は PAT 未設定時だけ実行する。
+両方走らせると worker デプロイが二重になり、D1 migration の同時適用で競合しうる。
+
+### 期限が切れたら
+
+push が 403 になり `Notify on unexpected failure` が Issue を立てる。新しい PAT を発行して
+Secret を差し替えれば、次の実行から復帰する（取りこぼした分は溜まっているだけなので、
+1 回の同期でまとめて追いつく）。
