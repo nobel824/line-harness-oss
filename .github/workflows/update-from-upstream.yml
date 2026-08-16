@@ -47,6 +47,11 @@ jobs:
   update:
     if: github.repository != 'Shudesu/line-harness-oss'
     runs-on: ubuntu-latest
+    env:
+      # step の `if` は secrets コンテキストを参照できない（使えるのは github / env /
+      # steps / vars など）。書くと "Invalid workflow file" で run ごと落ちるので、
+      # job の env に畳んでから if で見る。値は 'true' / 'false' の文字列。
+      HAS_SYNC_PAT: ${{ secrets.UPSTREAM_SYNC_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,7 +83,7 @@ jobs:
       # 期限は発行画面でしか見えず忘れるので、毎回 API から読んで残り 30 日で 1 度だけ鳴らす。
       # ここが失敗しても同期本体は止めない (continue-on-error)。
       - name: Warn before the sync PAT expires
-        if: secrets.UPSTREAM_SYNC_TOKEN != ''
+        if: env.HAS_SYNC_PAT == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
@@ -333,7 +338,7 @@ jobs:
           steps.detect.outputs.has_changes == 'true' &&
           steps.decide.outcome == 'success' &&
           steps.decide.outputs.reason == '' &&
-          secrets.UPSTREAM_SYNC_TOKEN == ''
+          env.HAS_SYNC_PAT == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -351,7 +356,7 @@ jobs:
           steps.detect.outputs.has_changes == 'true' &&
           steps.decide.outcome == 'success' &&
           steps.decide.outputs.reason == '' &&
-          secrets.UPSTREAM_SYNC_TOKEN != ''
+          env.HAS_SYNC_PAT == 'true'
         run: |
           echo "Pushed with UPSTREAM_SYNC_TOKEN — deploy-cloudflare-{worker,admin}.yml"
           echo "fire from their own push trigger. Not dispatching to avoid double deploys."
