@@ -72,8 +72,11 @@ class D1Stmt {
     if (this.sql.includes('SELECT * FROM broadcasts WHERE id = ?')) {
       return (this.state.broadcasts.get(String(this.params[0])) as T | undefined) ?? null;
     }
-    if (this.sql.includes('COUNT(*) AS cnt')) {
-      return { cnt: this.matchingFriends().length } as T;
+    // preview-count は toSegmentCountSql（`COUNT(*) as count`）を通り、
+    // tag / all 経路は手書きの `COUNT(*) AS cnt` を使う。どちらも同じ件数を返す。
+    if (/COUNT\(\*\) AS (cnt|count)/i.test(this.sql)) {
+      const matched = this.matchingFriends().length;
+      return { cnt: matched, count: matched } as T;
     }
     return null;
   }
@@ -82,7 +85,7 @@ class D1Stmt {
     if (this.sql.includes('SELECT * FROM broadcasts')) {
       return { results: [...this.state.broadcasts.values()] as T[], success: true, meta: {} };
     }
-    if (this.sql.startsWith('SELECT f.id, f.line_user_id FROM friends f')) {
+    if (this.sql.startsWith('SELECT f.id, f.line_user_id, f.display_name FROM friends f')) {
       return { results: this.matchingFriends() as T[], success: true, meta: {} };
     }
     return {
@@ -333,7 +336,13 @@ describe('broadcast exclusion delivery', () => {
     state.broadcasts.get('tag-target')!.target_tag_id = 'exclude-tag';
     const tagClient = lineClient();
     await processBroadcastSend(db, tagClient, 'tag-target');
-    expect(tagClient.multicast).toHaveBeenCalledWith(['U_keep'], expect.any(Array), expect.any(Array));
+    // upstream が multicast に retryKey (第4引数・LINE の再送冪等化キー) を足した。
+    expect(tagClient.multicast).toHaveBeenCalledWith(
+      ['U_keep'],
+      expect.any(Array),
+      expect.any(Array),
+      expect.any(String),
+    );
   });
 
   it('preserves the existing multi-account-dedup queue handoff', async () => {

@@ -6,8 +6,11 @@ import {
   addTagToFriend,
   removeTagFromFriend,
   getFriendTags,
+  getFormSubmissionsByFriend,
   getScenarios,
   enrollFriendInScenario,
+  getMileageSummaryForFriend,
+  getMileageHistoryForFriend,
   jstNow,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
@@ -390,15 +393,40 @@ friends.get('/api/friends/ref-stats', async (c) => {
   }
 });
 
+// GET /api/friends/:id/mileage - admin wallet summary + recent ledger history
+friends.get('/api/friends/:id/mileage', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const friend = await getFriendById(c.env.DB, friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const requestedLimit = Number.parseInt(c.req.query('limit') ?? '', 10);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(100, Math.max(1, requestedLimit))
+      : 10;
+    const [summary, history] = await Promise.all([
+      getMileageSummaryForFriend(c.env.DB, friendId),
+      getMileageHistoryForFriend(c.env.DB, friendId, { limit }),
+    ]);
+    return c.json({ success: true, data: { summary, history } });
+  } catch (err) {
+    console.error('GET /api/friends/:id/mileage error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 // GET /api/friends/:id - get single friend with tags
 friends.get('/api/friends/:id', async (c) => {
   try {
     const id = c.req.param('id');
     const db = c.env.DB;
 
-    const [friend, tags] = await Promise.all([
+    const [friend, tags, formSubmissions] = await Promise.all([
       getFriendById(db, id),
       getFriendTags(db, id),
+      getFormSubmissionsByFriend(db, id, 10),
     ]);
 
     if (!friend) {
@@ -410,6 +438,14 @@ friends.get('/api/friends/:id', async (c) => {
       data: {
         ...serializeFriend(friend),
         tags: tags.map(serializeTag),
+        formSubmissions: formSubmissions.map((submission) => ({
+          id: submission.id,
+          formId: submission.form_id,
+          formName: submission.form_name,
+          fields: JSON.parse(submission.form_fields || '[]') as unknown[],
+          data: JSON.parse(submission.data || '{}') as Record<string, unknown>,
+          createdAt: submission.created_at,
+        })),
       },
     });
   } catch (err) {

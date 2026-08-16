@@ -15,7 +15,9 @@ describe('buildSegmentQuery', () => {
   it('keeps the following-friend restriction when clauses are empty', () => {
     const { sql, bindings } = buildSegmentQuery({ operator: 'AND', rules: [] });
 
-    expect(sql).toBe('SELECT f.id, f.line_user_id FROM friends f WHERE f.is_following = 1');
+    expect(sql).toBe(
+      'SELECT f.id, f.line_user_id, f.display_name FROM friends f WHERE f.is_following = 1 ORDER BY f.created_at ASC, f.id ASC',
+    );
     expect(bindings).toEqual([]);
   });
 
