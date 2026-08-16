@@ -174,7 +174,9 @@ app.use('*', cors({
   origin: (origin, c) => resolveCorsOrigin(c.env, origin, c.req.url),
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'x-admin-api-key'],
+  // Idempotency-Key は admin (別オリジン) の POST /api/broadcasts が送る。
+  // 許可しないと preflight で弾かれ、POST 自体がブラウザに止められる。
+  allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'x-admin-api-key', 'Idempotency-Key'],
   maxAge: 600,
 }));
 
