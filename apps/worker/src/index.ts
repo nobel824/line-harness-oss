@@ -13,6 +13,8 @@ import {
   getLineAccountById,
   getAffiliateLinkByRefCode,
   incrementAffiliateLinkClick,
+  enqueueFollowingMileageMilestones,
+  processPendingMileageEvents,
 } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts, processQueuedBroadcasts } from './services/broadcast.js';
@@ -23,6 +25,7 @@ import { processInsightFetch } from './services/insight-fetcher.js';
 import { processDueReminders } from './services/booking-reminders.js';
 import { runExpirer } from './services/booking-expirer.js';
 import { processDueEventReminders } from './services/event-booking-reminders.js';
+import { processDueMeetConsultationReminders } from './services/meet-consultation-reminders.js';
 import { runEventBookingExpirer } from './services/event-booking-expirer.js';
 import { sendEventBookingNotification } from './services/event-booking-notifier.js';
 import { sendBookingNotification } from './services/booking-notifier.js';
@@ -48,6 +51,7 @@ import { affiliateSelfRoutes } from './routes/affiliate-self.js';
 // Round 3 ルート
 import { webhooks } from './routes/webhooks.js';
 import { calendar } from './routes/calendar.js';
+import { meetConsultations } from './routes/meet-consultations.js';
 import { reminders } from './routes/reminders.js';
 import { scoring } from './routes/scoring.js';
 import { templates } from './routes/templates.js';
@@ -80,8 +84,12 @@ import { messageTemplates } from './routes/message-templates.js';
 import dedupPreview from './routes/dedup-preview.js';
 import { profileRefresh } from './routes/profile-refresh.js';
 import { richMenuGroups } from './routes/rich-menu-groups.js';
+import { lineProxy } from './routes/line-proxy.js';
+import { webinarRoutes } from './routes/webinars.js';
+import { instagramEngagement } from './routes/instagram-engagement.js';
 import adminVersion from './routes/admin-version.js';
 import adminUpdate from './routes/admin-update.js';
+import { mediaInquiries } from './routes/media-inquiries.js';
 import { isLinkPreviewBot } from './lib/og-bot.js';
 import { buildOgHtml } from './lib/og-html.js';
 import {
@@ -127,6 +135,14 @@ export type Env = {
     WORKER_PUBLIC_URL?: string;
     ADMIN_PUBLIC_URL?: string;
     LIFF_PUBLIC_URL?: string;
+    // Google Calendar booking sync. Store the private key as a Worker secret.
+    // Calendar owners only enter/share their Google Calendar ID in admin UI.
+    GOOGLE_SERVICE_ACCOUNT_EMAIL?: string;
+    GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
+    // Keyless Google Calendar connection. User grants access once via OAuth;
+    // the Worker keeps a refresh token and never needs a service-account key.
+    GOOGLE_OAUTH_CLIENT_ID?: string;
+    GOOGLE_OAUTH_CLIENT_SECRET?: string;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -134,6 +150,21 @@ export type Env = {
 };
 
 const app = new Hono<Env>();
+
+// Public form endpoint used by the-harness.com. Keep this allowlist separate
+// from credentialed admin CORS so the media origin gains access to this route
+// only, never to the admin API surface.
+app.use('/api/public/media-inquiries', cors({
+  origin: (origin) => [
+    'https://the-harness.com',
+    'https://www.the-harness.com',
+    'http://localhost:4321',
+    'http://127.0.0.1:4321',
+  ].includes(origin) ? origin : '',
+  allowMethods: ['POST', 'OPTIONS'],
+  allowHeaders: ['Content-Type'],
+  maxAge: 600,
+}));
 
 // CORS — credentialed cookie auth cannot use a wildcard origin. Reflect only
 // same-origin requests and origins on the ADMIN_ORIGIN allowlist; everything
@@ -170,10 +201,12 @@ app.route('/', inbox);
 app.route('/', openapi);
 app.route('/', liffRoutes);
 app.route('/', affiliateSelfRoutes);
+app.route('/', mediaInquiries);
 
 // Mount route groups — Round 3
 app.route('/', webhooks);
 app.route('/', calendar);
+app.route('/', meetConsultations);
 app.route('/', reminders);
 app.route('/', scoring);
 app.route('/', templates);
@@ -202,6 +235,10 @@ app.route('/', messageTemplates);
 app.route('/', dedupPreview);
 app.route('/', profileRefresh);
 app.route('/', richMenuGroups);
+app.route('/', webinarRoutes);
+app.route('/', instagramEngagement);
+// LINE Messaging API 互換プロキシ — 外部エージェントの直接送信を messages_log に残す
+app.route('/', lineProxy);
 
 // Phase 5 (upgrade flow) — public build metadata endpoint. Mounted under
 // /admin/ but intentionally unauthenticated: the dashboard fetches /admin/version
@@ -326,11 +363,22 @@ app.get('/r/:ref', async (c) => {
   // friend-add gate (initSalonBooking, initEventBooking); page=book/form
   // would bypass that gate and bypass ref-based attribution, so they are
   // intentionally excluded until those initializers are unified.
-  const PAGE_PASSTHROUGH_ALLOWED = new Set(['salon-book', 'event', 'event-me']);
+  const PAGE_PASSTHROUGH_ALLOWED = new Set(['salon-book', 'event', 'event-me', 'webinar']);
   const page = c.req.query('page');
   if (page && PAGE_PASSTHROUGH_ALLOWED.has(page)) liffParams.set('page', page);
   const id = c.req.query('id');
   if (id) liffParams.set('id', id);
+  const slug = c.req.query('slug');
+  if (slug) liffParams.set('slug', slug);
+
+  // Ad click IDs + UTM passthrough. /auth/line forwards its full query string
+  // to /r/:ref, but rebuilding liffParams here without these keys silently
+  // drops ad attribution for the primary mobile path. Keep this list in sync
+  // with the params /auth/line reads.
+  for (const key of ['gclid', 'fbclid', 'twclid', 'ttclid', 'utm_source', 'utm_medium', 'utm_campaign']) {
+    const value = c.req.query(key);
+    if (value) liffParams.set(key, value);
+  }
   const liffTarget = liffParams.toString() ? `${liffUrl}?${liffParams.toString()}` : liffUrl;
 
   // Help link carries the *resolved* liff target as `t=` so the help page
@@ -614,11 +662,13 @@ app.get('/o', async (c) => {
 
   const liffParams = new URLSearchParams();
   liffParams.set('liffId', liffId);
-  const PAGE_PASSTHROUGH_ALLOWED = new Set(['salon-book', 'event', 'event-me']);
+  const PAGE_PASSTHROUGH_ALLOWED = new Set(['salon-book', 'event', 'event-me', 'webinar']);
   const page = c.req.query('page');
   if (page && PAGE_PASSTHROUGH_ALLOWED.has(page)) liffParams.set('page', page);
   const id = c.req.query('id');
   if (id) liffParams.set('id', id);
+  const slug = c.req.query('slug');
+  if (slug) liffParams.set('slug', slug);
   const liffTarget = `https://liff.line.me/${liffId}?${liffParams.toString()}`;
 
   const ua = (c.req.header('user-agent') || '').toLowerCase();
@@ -829,7 +879,20 @@ export async function notFoundHandler(
   if (!c.env.ASSETS || typeof c.env.ASSETS.fetch !== 'function') {
     return c.json({ success: false, error: 'Not found' }, 404);
   }
-  return c.env.ASSETS.fetch(c.req.raw);
+  const assetRes = await c.env.ASSETS.fetch(c.req.raw);
+  if (assetRes.status !== 404) return assetRes;
+
+  // SPA fallback: LIFF deep links (/webinar/:slug, /events/:id など) は
+  // アセットストアに実ファイルが無く 404 で返る。HTML を要求する GET
+  // ナビゲーションに限り index.html を返してクライアントルーターに任せる。
+  // それ以外 (存在しない .js/.png への参照など) は 404 のまま透過する。
+  const accept = c.req.header('accept') ?? '';
+  if (c.req.method === 'GET' && accept.includes('text/html')) {
+    return c.env.ASSETS.fetch(
+      new Request(new URL('/', c.req.url).toString(), { headers: c.req.raw.headers }),
+    );
+  }
+  return assetRes;
 }
 app.notFound(notFoundHandler);
 
@@ -837,7 +900,7 @@ app.notFound(notFoundHandler);
 async function scheduled(
   event: ScheduledEvent,
   env: Env['Bindings'],
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<void> {
   // Get all active accounts from DB
   const dbAccounts = await getLineAccounts(env.DB);
@@ -902,6 +965,63 @@ async function scheduled(
     console.error('event-booking-reminders error:', e);
   }
 
+  // 外部Google Calendarで確定したMeet個別相談。前日・1時間前のLINE通知を
+  // D1で管理し、送信は必ずLINE Harness Proxyを通す。
+  try {
+    const result = await processDueMeetConsultationReminders(env.DB, {
+      now: new Date(),
+      proxyBaseUrl:
+        env.WORKER_PUBLIC_URL ?? 'https://your-worker.your-subdomain.workers.dev',
+      proxyDispatch: (request) => Promise.resolve(lineProxy.fetch(request, env, ctx)),
+    });
+    if (result.sent + result.failed > 0) {
+      console.log(`[meet-consultation-reminders] sent=${result.sent} failed=${result.failed}`);
+    }
+  } catch (e) {
+    console.error('meet-consultation-reminders error:', e);
+  }
+
+  // ウェビナー予約リマインド (セッション選択メニュー)。時刻厳守・軽量なので
+  // booking 系リマインドと同じく重いジョブより先に実行する。
+  try {
+    const { processWebinarReminders } = await import('./services/webinar-reminders.js');
+    const liffMatch = /liff\.line\.me\/([^/?]+)/.exec(env.LIFF_URL ?? '');
+    const result = await processWebinarReminders(
+      env.DB,
+      {
+        proxyBaseUrl:
+          env.WORKER_PUBLIC_URL ?? 'https://your-worker.your-subdomain.workers.dev',
+        defaultAccessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
+        defaultLiffId: liffMatch?.[1] ?? null,
+        proxyDispatch: (request) => Promise.resolve(lineProxy.fetch(request, env, ctx)),
+      },
+    );
+    if (result.sent + result.failed > 0) {
+      console.log(`[webinar-reminders] sent=${result.sent} failed=${result.failed}`);
+    }
+  } catch (e) {
+    console.error('webinar-reminders error:', e);
+  }
+
+  // 予約画面の未予約、予約後の未視聴、フォーム途中離脱、回答後の相談未予約を
+  // 段階別に自動追客する。対象は followup config で有効化したウェビナーだけ。
+  try {
+    const { processWebinarFollowups } = await import('./services/webinar-followups.js');
+    const liffMatch = /liff\.line\.me\/([^/?]+)/.exec(env.LIFF_URL ?? '');
+    const result = await processWebinarFollowups(env.DB, {
+      proxyBaseUrl:
+        env.WORKER_PUBLIC_URL ?? 'https://your-worker.your-subdomain.workers.dev',
+      defaultAccessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
+      defaultLiffId: liffMatch?.[1] ?? null,
+      proxyDispatch: (request) => Promise.resolve(lineProxy.fetch(request, env, ctx)),
+    });
+    if (result.sent + result.failed > 0) {
+      console.log(`[webinar-followups] sent=${result.sent} failed=${result.failed}`);
+    }
+  } catch (e) {
+    console.error('webinar-followups error:', e);
+  }
+
   // Phase 2: 配信系と定期ジョブを並列実行する。processScheduledBroadcasts は tag/all の
   // inline 送信を含み時間がかかり得るため、queue 処理と並列にして互いを block しない
   // (barrier 化すると長い scheduled 送信が queue 処理を待たせる)。scheduled dedup は
@@ -916,6 +1036,24 @@ async function scheduled(
   jobs.push(processQueuedBroadcasts(env.DB, defaultLineClient, env.WORKER_URL));
   jobs.push(checkAccountHealth(env.DB));
 
+  // Mileage is an eventually-consistent projection. Reuse the existing
+  // minute cron invocation, but drain only every five minutes and at most 100
+  // actions per batch so it adds no extra Cron Trigger and keeps D1 load flat.
+  if (
+    event.cron === '* * * * *'
+    && new Date(event.scheduledTime).getUTCMinutes() % 5 === 0
+  ) {
+    jobs.push(
+      processPendingMileageEvents(env.DB, { limit: 100 }).then((result) => {
+        if (result.claimed > 0) {
+          console.log(
+            `[mileage-queue] processed=${result.processed} failed=${result.failed} granted=${result.granted}`,
+          );
+        }
+      }),
+    );
+  }
+
   await Promise.allSettled(jobs);
 
   // Fetch broadcast insights (runs daily, self-throttled)
@@ -927,6 +1065,19 @@ async function scheduled(
 
   // Booking expirer — runs only on the 6h cron tick.
   if (event.cron === '0 */6 * * *') {
+    try {
+      const result = await enqueueFollowingMileageMilestones(env.DB, {
+        limitPerMilestone: 1000,
+      });
+      if (result.eventsCreated + result.queued > 0) {
+        console.log(
+          `[following-mileage] events=${result.eventsCreated} queued=${result.queued}`,
+        );
+      }
+    } catch (e) {
+      console.error('following-mileage error:', e);
+    }
+
     try {
       const result = await runExpirer(env.DB, {
         now: new Date(),

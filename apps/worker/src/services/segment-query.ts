@@ -92,9 +92,12 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
   }
 
   const separator = condition.operator === 'AND' ? ' AND ' : ' OR '
-  const sql = clauses.length > 0
-    ? `SELECT f.id, f.line_user_id FROM friends f WHERE f.is_following = 1 AND (${clauses.join(separator)})`
-    : 'SELECT f.id, f.line_user_id FROM friends f WHERE f.is_following = 1'
+  // is_following = 1 を常に強制する（フォーク独自）。ブロック / 解除済みの友だちへ
+  // 配信しないため。upstream は条件なし。
+  const where = clauses.length > 0
+    ? `f.is_following = 1 AND (${clauses.join(separator)})`
+    : 'f.is_following = 1'
+  const sql = `SELECT f.id, f.line_user_id, f.display_name FROM friends f WHERE ${where} ORDER BY f.created_at ASC, f.id ASC`
 
   return { sql, bindings }
 }
@@ -106,5 +109,10 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
  * まで飲み込み SQL が壊れるため（そのバグをこのヘルパで防ぐ）。
  */
 export function toSegmentCountSql(selectSql: string): string {
-  return selectSql.replace(/^SELECT f\.id, f\.line_user_id FROM/, 'SELECT COUNT(*) as count FROM')
+  return selectSql
+    .replace(
+      /^SELECT f\.id, f\.line_user_id, f\.display_name FROM/,
+      'SELECT COUNT(*) as count FROM',
+    )
+    .replace(/ ORDER BY f\.created_at ASC, f\.id ASC$/, '')
 }
