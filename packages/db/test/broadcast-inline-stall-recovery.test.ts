@@ -48,6 +48,7 @@ interface StuckRow {
   accountIds?: string | null;
   lineRequestId?: string | null;
   successCount?: number;
+  targetType?: string;
 }
 
 describe('recoverStalledBroadcasts — inline 送信経路の停滞', () => {
@@ -61,11 +62,12 @@ describe('recoverStalledBroadcasts — inline 送信経路の停滞', () => {
            (id, title, message_type, message_content, target_type, status,
             scheduled_at, batch_offset, batch_lock_at, segment_conditions,
             account_ids, line_request_id, success_count)
-         VALUES (?, ?, 'text', 'hello', 'all', 'sending', ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, 'text', 'hello', ?, 'sending', ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
         row.id,
+        row.targetType ?? 'all',
         row.scheduledAt ?? null,
         row.batchOffset ?? 0,
         row.lockedMinutesAgo == null ? null : jstStamp(row.lockedMinutesAgo),
@@ -144,6 +146,14 @@ describe('recoverStalledBroadcasts — inline 送信経路の停滞', () => {
 
     expect(read('segmented').status).toBe('sending');
     expect(read('dedup').status).toBe('sending');
+  });
+
+  it('tag 配信は部分送信の判別ができないので触らない（再送で二重配信になるため）', async () => {
+    insertSending({ id: 'tag-inline', targetType: 'tag', lockedMinutesAgo: 20 });
+
+    await recoverStalledBroadcasts(db);
+
+    expect(read('tag-inline').status).toBe('sending');
   });
 
   it('batch_offset = -1 (キューのロック) は既存の復旧系統に任せる', async () => {

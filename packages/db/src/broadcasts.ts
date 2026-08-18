@@ -456,10 +456,19 @@ export async function recoverStalledBroadcasts(db: D1Database): Promise<void> {
   //    のまま残り、どの復旧経路にも拾われず永久に未送信で固着する。UI は「送信中
   //    0/0人」と表示し続けるだけでエラーも出ない。2026-08-17 に実際に踏んだ。
   //
+  //    対象は target_type='all' だけに絞る。all は LINE broadcast API を 1 回叩く
+  //    だけなので「部分的に送れている」中間状態が原理的に存在せず、送ったか送って
+  //    いないかを line_request_id だけで判定できる。tag の inline 経路は multicast を
+  //    バッチで回すが success_count を DB に書くのは全バッチ完了後なので、「400人に
+  //    送り終えた直後に死んだ」row が success_count=0 に見えてしまい、ここで戻すと
+  //    再送になる。retry key でほとんどは弾かれるものの、10分の間にタグのメンバーが
+  //    変わると batch 構成が変わって key が一致せず、実際に二重送信し得る。tag を
+  //    安全に復旧するにはバッチ単位の進捗永続化が要るので、それは別途。
+  //
   //    二重送信の防止は 3 段で担保する:
   //    - line_request_id IS NULL … LINE broadcast API が requestId を返した直後に
   //      書かれるので、非 NULL なら送信済み。NULL の row だけを戻す
-  //    - success_count = 0 … multicast が 1 バッチでも成功していたら触らない
+  //    - success_count = 0 … 念のための二重の歯止め
   //    - LINE の retry key … autoTrackContent は dedup key 付きの
   //      getOrCreateAutoTrackedLink を使うため同じ入力から同じ本文が再生される。
   //      よって再試行の retry key も一致し、「送信済みだが requestId を書く前に
@@ -475,6 +484,7 @@ export async function recoverStalledBroadcasts(db: D1Database): Promise<void> {
               batch_lock_at = NULL
         WHERE status = 'sending'
           AND sent_at IS NULL
+          AND target_type = 'all'
           AND batch_offset = 0
           AND segment_conditions IS NULL
           AND account_ids IS NULL
