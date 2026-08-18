@@ -390,6 +390,11 @@ export async function recoverStalledBroadcasts(db: D1Database): Promise<void> {
   // dedup_progress あり (success_count>0) の再開可能 lock 用。chunking で 1 実行が短いため
   // 安全に短くできる。0.0021日 ≈ 3.0分。cron 間隔(5分)より短いので次の tick で resume。
   const STALL_LOCK_REVOKE_DAYS_RESUMABLE = 0.0021;
+  // inline 送信経路 (batch_offset を進めない) の停滞用。tag multicast の stagger 遅延を
+  // 含めても 1 回の送信は数分で終わるので、10分 (10/1440 ≈ 0.0069日) 待てば「その
+  // invocation は既に死んでいる」と判定してよい。短くしすぎると送信中の row を
+  // 巻き戻して二重送信の窓を広げる。
+  const STALL_INLINE_REVOKE_DAYS = 0.0069;
   // 1) 未着手 (segment / dedup どちらも対象)
   //    閾値は batch_lock_at (= ロック取得時刻) のみ。created_at にフォールバック
   //    すると jstNow() の `+09:00` suffix で 9 時間ズレるバグが出るので使わない。
@@ -443,6 +448,52 @@ export async function recoverStalledBroadcasts(db: D1Database): Promise<void> {
        AND julianday('now', '+9 hours') - julianday(batch_lock_at) > ${STALL_LOCK_REVOKE_DAYS_RESUMABLE}`,
     )
     .run();
+
+  // 4) inline 送信経路の停滞。1)〜3) はいずれも batch_offset = -1 (キュー処理の
+  //    ロック) を前提にしているが、inline 経路 (segment も account_ids も持たない
+  //    「全員」/ tag 配信) は batch_offset を触らないまま LINE API を叩く。この間に
+  //    Worker ごと落ちる (cron の CPU 超過など) と status='sending' / batch_offset=0
+  //    のまま残り、どの復旧経路にも拾われず永久に未送信で固着する。UI は「送信中
+  //    0/0人」と表示し続けるだけでエラーも出ない。2026-08-17 に実際に踏んだ。
+  //
+  //    対象は target_type='all' だけに絞る。all は LINE broadcast API を 1 回叩く
+  //    だけなので「部分的に送れている」中間状態が原理的に存在せず、送ったか送って
+  //    いないかを line_request_id だけで判定できる。tag の inline 経路は multicast を
+  //    バッチで回すが success_count を DB に書くのは全バッチ完了後なので、「400人に
+  //    送り終えた直後に死んだ」row が success_count=0 に見えてしまい、ここで戻すと
+  //    再送になる。retry key でほとんどは弾かれるものの、10分の間にタグのメンバーが
+  //    変わると batch 構成が変わって key が一致せず、実際に二重送信し得る。tag を
+  //    安全に復旧するにはバッチ単位の進捗永続化が要るので、それは別途。
+  //
+  //    二重送信の防止は 3 段で担保する:
+  //    - line_request_id IS NULL … LINE broadcast API が requestId を返した直後に
+  //      書かれるので、非 NULL なら送信済み。NULL の row だけを戻す
+  //    - success_count = 0 … 念のための二重の歯止め
+  //    - LINE の retry key … autoTrackContent は dedup key 付きの
+  //      getOrCreateAutoTrackedLink を使うため同じ入力から同じ本文が再生される。
+  //      よって再試行の retry key も一致し、「送信済みだが requestId を書く前に
+  //      落ちた」極小の窓に当たっても LINE 側で重複が弾かれる
+  //
+  //    戻し先は scheduled_at の有無で分ける。予約配信は 'scheduled' に戻せば次の
+  //    cron が自動で送り直す (自己修復)。即時送信は人が押した操作なので 'draft' に
+  //    戻して UI から触れる状態にするだけに留める (勝手に送り直さない)。
+  await db
+    .prepare(
+      `UPDATE broadcasts
+          SET status = CASE WHEN scheduled_at IS NOT NULL THEN 'scheduled' ELSE 'draft' END,
+              batch_lock_at = NULL
+        WHERE status = 'sending'
+          AND sent_at IS NULL
+          AND target_type = 'all'
+          AND batch_offset = 0
+          AND segment_conditions IS NULL
+          AND account_ids IS NULL
+          AND line_request_id IS NULL
+          AND success_count = 0
+          AND batch_lock_at IS NOT NULL
+          AND julianday('now', '+9 hours') - julianday(batch_lock_at) > ${STALL_INLINE_REVOKE_DAYS}`,
+    )
+    .run();
 }
 
 export async function updateBroadcastBatchProgress(
@@ -472,6 +523,15 @@ export async function updateBroadcastStatus(
 ): Promise<void> {
   const fields: string[] = ['status = ?'];
   const values: unknown[] = [status];
+
+  if (status === 'sending') {
+    // inline 送信経路の「送信を開始した時刻」を刻む。recoverStalledBroadcasts の
+    // 系統 4) がこの値の経過時間だけを見て「Worker ごと死んだ row」を判定するため、
+    // ここが NULL のままだと停滞しても復旧できない。値は SQL の strftime で作る:
+    // jstNow() の '+09:00' suffix は SQLite 側で UTC 正規化されて見かけ 9 時間古くなり、
+    // recover 側 (julianday('now','+9 hours')) と比較すると即座に stale 判定される。
+    fields.push("batch_lock_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')");
+  }
 
   if (status === 'sent') {
     fields.push('sent_at = ?');
