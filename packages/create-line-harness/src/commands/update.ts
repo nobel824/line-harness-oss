@@ -465,7 +465,7 @@ export async function runUpdate(
   repoDir: string,
   options: RunUpdateOptions = {},
 ): Promise<void> {
-  p.intro(pc.bgCyan(pc.black(" LINE Harness アップデート ")));
+  p.intro(pc.bgCyan(pc.black(" L Harness アップデート ")));
 
   const configPath = join(repoDir, ".line-harness-config.json");
   let state = loadState(repoDir);

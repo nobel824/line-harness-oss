@@ -1,5 +1,12 @@
 # Changelog
 
+## Brand name update (2026-08-19)
+
+- Public product display name changed from the former name to **L Harness**.
+- Repository URLs, npm package names, CLI commands, and internal identifiers
+  remain unchanged for backward compatibility.
+- Added [BRAND.md](BRAND.md) with naming and third-party trademark policy.
+
 ## v0.21.3 (2026-08-15)
 
 ### Worker Assetsアップロードの修正（2026-08-16）
@@ -34,7 +41,7 @@ npx create-line-harness@latest update
 ### ライブCTAから個別相談を即時確定
 
 - オートウェビナーのフォーム送信後、その画面のまま空き枠を選び、個別相談を即時確定
-- LINE Harnessの受付時間、日付別枠、既存予約、Google Calendarの予定、60分のリードタイムを反映し、確定直前にも二重予約を検査
+- L Harnessの受付時間、日付別枠、既存予約、Google Calendarの予定、60分のリードタイムを反映し、確定直前にも二重予約を検査
 - Google Meet付き予定、`meet_consultations`、前日・1時間前のLINEリマインド、確定通知を一括作成
 - 管理画面からGoogleアカウント本人が許可するOAuth接続を追加。サービスアカウントキーとカレンダー共有は不要
 - OAuth権限は `calendar.events` と `calendar.events.freebusy` の2つだけに限定
