@@ -257,7 +257,10 @@ export async function processScheduledBroadcasts(
     try {
       // Optimistic lock: claim this broadcast (scheduled → sending)
       const lockResult = await db
-        .prepare(`UPDATE broadcasts SET status = 'sending' WHERE id = ? AND status = 'scheduled'`)
+        // batch_lock_at も同時に刻む。claim から processBroadcastSend が自前で
+        // 刻むまでの隙間で Worker が死ぬと NULL のまま固着し、recoverStalledBroadcasts
+        // の inline 系統に拾われなくなる (2026-08-17 の未送信事故はこの窓で起きた)。
+        .prepare(`UPDATE broadcasts SET status = 'sending', batch_lock_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours') WHERE id = ? AND status = 'scheduled'`)
         .bind(broadcast.id)
         .run();
       if (!lockResult.meta.changes || lockResult.meta.changes === 0) continue;

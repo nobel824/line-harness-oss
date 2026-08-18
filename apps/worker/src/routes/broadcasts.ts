@@ -719,13 +719,13 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
     // 一意に確定する (rollback 時の status 復元に使用)。
     let claimedStatus: 'draft' | 'scheduled' | null = null;
     const draftClaim = await c.env.DB.prepare(
-      `UPDATE broadcasts SET status = 'sending' WHERE id = ? AND status = 'draft'`
+      `UPDATE broadcasts SET status = 'sending', batch_lock_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours') WHERE id = ? AND status = 'draft'`
     ).bind(id).run();
     if (draftClaim.meta.changes) {
       claimedStatus = 'draft';
     } else {
       const schedClaim = await c.env.DB.prepare(
-        `UPDATE broadcasts SET status = 'sending' WHERE id = ? AND status = 'scheduled'`
+        `UPDATE broadcasts SET status = 'sending', batch_lock_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours') WHERE id = ? AND status = 'scheduled'`
       ).bind(id).run();
       if (schedClaim.meta.changes) {
         claimedStatus = 'scheduled';
