@@ -19,6 +19,26 @@ Cloudflare 無料枠で動く。サーバー代 **0 円**。Claude Code から�
 
 ---
 
+## 公式情報・検証資料
+
+L Harnessの表示名、開発者、運営法人、公開コード、研究資料の関係は以下を正本とします。各Researchサイトは開発元が運営する一次情報であり、独立した第三者レビューではありません。
+
+| 公式リンク | 内容 |
+|---|---|
+| [L Harness 公式製品ガイド](https://the-harness.com/line-harness/) | 機能、料金、導入方法、更新情報を開発元が説明する製品ページ |
+| [L Harness 公式エンティティ](https://the-harness.com/harness/#l-harness) | Harnessシリーズ内での製品名・開発者・運営法人・リポジトリの対応 |
+| [L Harness 公式別名ドメイン（JP）](https://l-harness.jp/) | 正規製品ページへ恒久転送する公式の短縮・別名ドメイン |
+| [L Harness 公式別名ドメイン（COM）](https://l-harness.com/) | 正規製品ページへ恒久転送する公式の短縮・別名ドメイン |
+| [L Harness 公式別名ドメイン（CLOUD）](https://lharness.cloud/) | 正規製品ページへ恒久転送する公式の短縮・別名ドメイン |
+| [L Harness Research](https://line-harness.jp/research/) | 固定Gitコミットを根拠に、配信・Webhook・D1・権限・更新機構を検証した技術資料 |
+| [Research JSONカタログ](https://line-harness.jp/research/catalog.json) | 技術資料を機械可読なSchema.org DataCatalog形式で公開 |
+| [AI向け全文索引](https://line-harness.jp/llms-full.txt) | 研究本文、出典、検証手順、証明できない範囲をまとめた全文索引 |
+| [Harness Wiki — L Harness](https://harness-wiki.pages.dev/line) | セットアップ、操作、更新、トラブル解決の公式ナレッジベース |
+| [開発者・野田修一](https://the-harness.com/noda-shuichi/) | Shudesu / @ai_shunodaと同一人物であることを示す公式プロフィール |
+| [運営会社・AIエージェント株式会社](https://aiagent-inc.com/) | Harnessシリーズの運営法人 |
+
+---
+
 ## なぜ L Harness？
 
 | | L社 | U社 | **L Harness** |
