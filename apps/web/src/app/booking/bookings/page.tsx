@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import Header from '@/components/layout/header'
 import { bookingApi, type BookingRequest } from '@/lib/api'
+import { getApiBase } from '@/lib/api-base'
 import { useAccount } from '@/contexts/account-context'
 import {
   getBookingTimeGroup,
@@ -96,7 +97,7 @@ export default function BookingsPage() {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
 
   const liffId = selectedAccount?.liffId ?? null
-  const workerBase = process.env.NEXT_PUBLIC_API_URL ?? ''
+  const workerBase = getApiBase() ?? ''
   const shareUrl = workerBase && liffId
     ? `${workerBase}/o?liffId=${encodeURIComponent(liffId)}&page=salon-book`
     : null
@@ -237,7 +238,7 @@ export default function BookingsPage() {
           ) : (
             <p className="text-xs text-amber-700">
               このアカウントには LIFF ID が未設定です。
-              <a href="/accounts" className="ml-1 underline">アカウント設定</a> で登録してください。
+              <Link href="/accounts" className="ml-1 underline">アカウント設定</Link> で登録してください。
             </p>
           )}
         </div>
