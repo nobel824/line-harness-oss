@@ -162,8 +162,10 @@ export async function matchAndReply(
     );
     const messages: Message[] = [replyMsg];
 
-    const secondContent = rule.response_content_2;
-    if (secondContent != null && secondContent !== '') {
+    // 空白だけの2通目を送ると LINE 側で弾かれ、配列ごと1回の API 呼び出しなので
+    // 1通目まで道連れで失敗する。trim して「実質空」を1通扱いに寄せる。
+    const secondContent = rule.response_content_2?.trim() ? rule.response_content_2 : null;
+    if (secondContent != null) {
       const secondType = rule.response_type_2 ?? rule.response_type;
       messages.push(
         await buildExpandedReplyMessage(

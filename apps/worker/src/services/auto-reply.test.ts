@@ -242,6 +242,8 @@ describe('auto_reply second bubble', () => {
     ['カラムなし (既存レコード相当)', {}],
     ['response_content_2 が NULL', { response_type_2: null, response_content_2: null }],
     ['response_content_2 が空文字', { response_type_2: null, response_content_2: '' }],
+    ['response_content_2 が空白のみ', { response_type_2: null, response_content_2: '   ' }],
+    ['response_content_2 が改行のみ', { response_type_2: null, response_content_2: '\n' }],
   ])('2通目が無いとき (%s) は従来どおり1通だけ送る', async (_label, over) => {
     const { result, proxyReply } = await replyTo('特典', { ...textRule, ...over });
 

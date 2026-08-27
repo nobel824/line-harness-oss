@@ -51,7 +51,9 @@ function serializeAutoReply(row: DbAutoReply): SerializedAutoReply {
 
 function emptyToNull(value: string | null | undefined): string | null {
   if (value == null) return null;
-  return value === '' ? null : value;
+  // 空白だけの本文を保存させない。2通目に入ると LINE 側で弾かれ、
+  // 配列ごと1回の API 呼び出しなので1通目まで道連れで失敗する。
+  return value.trim() === '' ? null : value;
 }
 
 /**
