@@ -25,6 +25,7 @@ const dbMocks = {
   getWebinarAnalyticsSummary: vi.fn(),
   getWebinarDailyStats: vi.fn(),
   getWebinarFormFunnelStats: vi.fn(),
+  getWebinarJourneyStats: vi.fn(),
   getFriendByLineUserId: vi.fn(),
   getFriendByLineUserIdForAccount: vi.fn(),
   getFriendById: vi.fn(),
@@ -109,6 +110,22 @@ beforeEach(() => {
   ]);
   dbMocks.upsertWebinarViewer.mockResolvedValue({ firstJoin: true });
   dbMocks.getWebinarCtas.mockResolvedValue([]);
+  dbMocks.getWebinarJourneyStats.mockResolvedValue({
+    picker_opens: 0,
+    registrations: 0,
+    viewers: 0,
+    form_submissions: 0,
+    followups: {
+      after_30m: { pending: 0, sent: 0, failed: 0 },
+      after_24h: { pending: 0, sent: 0, failed: 0 },
+    },
+    journey_followups: {
+      picker_no_registration: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+      registered_no_show: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+      submitted_no_booking_30m: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+      submitted_no_booking_24h: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+    },
+  });
   dbMocks.getUpcomingWebinarRegistration.mockResolvedValue(null);
   dbMocks.getWebinarRegistration.mockResolvedValue({
     id: 'reg-current', webinar_id: 'w1', friend_id: 'friend-1',
@@ -909,6 +926,22 @@ describe('admin CRUD', () => {
       submit_errors: 1,
       field_completions: [{ field_name: 'annual_revenue', users: 6 }],
     });
+    dbMocks.getWebinarJourneyStats.mockResolvedValue({
+      picker_opens: 20,
+      registrations: 12,
+      viewers: 8,
+      form_submissions: 4,
+      followups: {
+        after_30m: { pending: 2, sent: 5, failed: 1 },
+        after_24h: { pending: 1, sent: 3, failed: 0 },
+      },
+      journey_followups: {
+        picker_no_registration: { pending: 4, sent: 2, failed: 1, skipped: 0 },
+        registered_no_show: { pending: 1, sent: 2, failed: 0, skipped: 3 },
+        submitted_no_booking_30m: { pending: 2, sent: 1, failed: 1, skipped: 0 },
+        submitted_no_booking_24h: { pending: 1, sent: 0, failed: 0, skipped: 0 },
+      },
+    });
     const res = await req('/api/webinars/w1/analytics');
     const body = (await res.json()) as {
       data: {
@@ -918,6 +951,7 @@ describe('admin CRUD', () => {
         daily: unknown;
         participants: Array<Record<string, unknown>>;
         formFunnel: Record<string, unknown>;
+        journey: Record<string, unknown>;
       };
     };
     expect(body.data.sessions).toEqual([
@@ -953,6 +987,22 @@ describe('admin CRUD', () => {
       submitSuccesses: 4,
       submitErrors: 1,
       fieldCompletions: [{ fieldName: 'annual_revenue', users: 6 }],
+    });
+    expect(body.data.journey).toEqual({
+      pickerOpens: 20,
+      registrations: 12,
+      viewers: 8,
+      formSubmissions: 4,
+      followups: {
+        after_30m: { pending: 2, sent: 5, failed: 1 },
+        after_24h: { pending: 1, sent: 3, failed: 0 },
+      },
+      journeyFollowups: {
+        picker_no_registration: { pending: 4, sent: 2, failed: 1, skipped: 0 },
+        registered_no_show: { pending: 1, sent: 2, failed: 0, skipped: 3 },
+        submitted_no_booking_30m: { pending: 2, sent: 1, failed: 1, skipped: 0 },
+        submitted_no_booking_24h: { pending: 1, sent: 0, failed: 0, skipped: 0 },
+      },
     });
   });
 

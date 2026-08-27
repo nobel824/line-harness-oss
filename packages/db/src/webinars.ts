@@ -108,6 +108,27 @@ export interface WebinarFormFunnelStats {
   field_completions: Array<{ field_name: string; users: number }>;
 }
 
+export type WebinarFollowupKind = 'after_30m' | 'after_24h';
+export type WebinarFollowupStatus = 'pending' | 'sent' | 'failed';
+export type WebinarJourneyFollowupKind =
+  | 'picker_no_registration'
+  | 'registered_no_show'
+  | 'submitted_no_booking_30m'
+  | 'submitted_no_booking_24h';
+export type WebinarJourneyFollowupStatus = 'pending' | 'sent' | 'failed' | 'skipped';
+
+export interface WebinarJourneyStats {
+  picker_opens: number;
+  registrations: number;
+  viewers: number;
+  form_submissions: number;
+  followups: Record<WebinarFollowupKind, Record<WebinarFollowupStatus, number>>;
+  journey_followups: Record<
+    WebinarJourneyFollowupKind,
+    Record<WebinarJourneyFollowupStatus, number>
+  >;
+}
+
 export interface WebinarCreateInput {
   accountId?: string | null;
   title: string;
@@ -384,6 +405,120 @@ export async function getWebinarFormFunnelStats(
     submit_successes: summary?.submit_successes ?? 0,
     submit_errors: summary?.submit_errors ?? 0,
     field_completions: fields.results ?? [],
+  };
+}
+
+type WebinarJourneyCountRow = {
+  picker_opens: number;
+  registrations: number;
+  viewers: number;
+  form_submissions: number;
+};
+
+type WebinarFollowupCountRow = {
+  kind: string;
+  status: string;
+  count: number;
+};
+
+function isWebinarFollowupKind(value: string): value is WebinarFollowupKind {
+  return value === 'after_30m' || value === 'after_24h';
+}
+
+function isWebinarFollowupStatus(value: string): value is WebinarFollowupStatus {
+  return value === 'pending' || value === 'sent' || value === 'failed';
+}
+
+function isWebinarJourneyFollowupKind(value: string): value is WebinarJourneyFollowupKind {
+  return (
+    value === 'picker_no_registration' ||
+    value === 'registered_no_show' ||
+    value === 'submitted_no_booking_30m' ||
+    value === 'submitted_no_booking_24h'
+  );
+}
+
+function isWebinarJourneyFollowupStatus(value: string): value is WebinarJourneyFollowupStatus {
+  return value === 'pending' || value === 'sent' || value === 'failed' || value === 'skipped';
+}
+
+function emptyWebinarFollowupCounts(): WebinarJourneyStats['followups'] {
+  return {
+    after_30m: { pending: 0, sent: 0, failed: 0 },
+    after_24h: { pending: 0, sent: 0, failed: 0 },
+  };
+}
+
+function emptyWebinarJourneyFollowupCounts(): WebinarJourneyStats['journey_followups'] {
+  return {
+    picker_no_registration: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+    registered_no_show: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+    submitted_no_booking_30m: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+    submitted_no_booking_24h: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+  };
+}
+
+/** オートウェビナー導線の各段と追客の kind × status を集計する。 */
+export async function getWebinarJourneyStats(
+  db: D1Database,
+  webinarId: string,
+): Promise<WebinarJourneyStats> {
+  const [counts, followups, journeyFollowups] = await Promise.all([
+    db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM webinar_picker_opens WHERE webinar_id = ?) AS picker_opens,
+           (SELECT COUNT(*) FROM webinar_registrations WHERE webinar_id = ?) AS registrations,
+           (SELECT COUNT(*) FROM webinar_viewers WHERE webinar_id = ?) AS viewers,
+           (SELECT COUNT(*) FROM form_submissions fs
+            WHERE EXISTS (
+              SELECT 1 FROM webinar_ctas wc
+              WHERE wc.webinar_id = ? AND wc.form_id IS NOT NULL AND wc.form_id = fs.form_id
+            )) AS form_submissions`,
+      )
+      .bind(webinarId, webinarId, webinarId, webinarId)
+      .first<WebinarJourneyCountRow>(),
+    db
+      .prepare(
+        `SELECT kind, status, COUNT(*) AS count
+         FROM webinar_followups
+         WHERE webinar_id = ?
+         GROUP BY kind, status`,
+      )
+      .bind(webinarId)
+      .all<WebinarFollowupCountRow>(),
+    db
+      .prepare(
+        `SELECT kind, status, COUNT(*) AS count
+         FROM webinar_journey_followups
+         WHERE webinar_id = ?
+         GROUP BY kind, status`,
+      )
+      .bind(webinarId)
+      .all<WebinarFollowupCountRow>(),
+  ]);
+
+  const followupCounts = emptyWebinarFollowupCounts();
+  for (const row of followups.results ?? []) {
+    if (isWebinarFollowupKind(row.kind) && isWebinarFollowupStatus(row.status)) {
+      followupCounts[row.kind][row.status] = row.count;
+    }
+  }
+
+  const journeyFollowupCounts = emptyWebinarJourneyFollowupCounts();
+  for (const row of journeyFollowups.results ?? []) {
+    if (isWebinarJourneyFollowupKind(row.kind) && isWebinarJourneyFollowupStatus(row.status)) {
+      journeyFollowupCounts[row.kind][row.status] = row.count;
+    }
+  }
+
+  return {
+    picker_opens: counts?.picker_opens ?? 0,
+    registrations: counts?.registrations ?? 0,
+    viewers: counts?.viewers ?? 0,
+    form_submissions: counts?.form_submissions ?? 0,
+    followups: followupCounts,
+    journey_followups: journeyFollowupCounts,
   };
 }
 
