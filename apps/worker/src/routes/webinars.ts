@@ -90,6 +90,35 @@ function nowEpoch(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+type PublicPreRegistrationForm = {
+  id: string;
+  name: string;
+  description: string | null;
+  fields: unknown[];
+};
+
+async function loadPreRegistrationForm(
+  db: D1Database,
+  webinar: Webinar,
+): Promise<PublicPreRegistrationForm | null> {
+  const formId = webinar.pre_registration_form_id;
+  if (!formId) return null;
+  const form = await getFormById(db, formId);
+  if (!form || !form.is_active) return null;
+  let fields: unknown[] = [];
+  try {
+    fields = JSON.parse(form.fields || '[]') as unknown[];
+  } catch {
+    fields = [];
+  }
+  return {
+    id: form.id,
+    name: form.name,
+    description: form.description,
+    fields,
+  };
+}
+
 // LIFF caller を認証し、webinar とそのアカウント配下の friend を解決する。
 // 認証 (401) を webinar 存在確認より先に行う (existence oracle 対策)。
 // friend はウェビナーのアカウント配下の行を優先する (同一プロバイダーの複数
@@ -130,6 +159,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
     const auth = await resolveWebinarCaller(c, c.req.param('slug'));
     if (auth instanceof Response) return auth;
     const { webinar } = auth;
+    const preRegistrationForm = await loadPreRegistrationForm(c.env.DB, webinar);
+    const introImageUrl = webinar.intro_image_url ?? null;
 
     const now = nowEpoch();
     const rules = parseScheduleRules(webinar.schedule_json);
@@ -181,6 +212,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         replay: true,
         title: webinar.title,
         introText: webinar.intro_text,
+        introImageUrl,
+        preRegistrationForm,
         durationSeconds: webinar.duration_seconds,
         sessionStartAt: requestedSessionStartAt,
         offsetSeconds: 0,
@@ -226,6 +259,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
           waiting: true,
           title: webinar.title,
           introText: webinar.intro_text,
+          introImageUrl,
+          preRegistrationForm,
           nextSessionAt: next,
           offsetSeconds: now - next,
           comments: comments.map((cm) => ({
@@ -245,6 +280,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         live: false,
         title: webinar.title,
         introText: webinar.intro_text,
+        introImageUrl,
+        preRegistrationForm,
         nextSessionAt: next,
         upcoming,
         registeredSessionAt: reg?.session_start_at ?? null,
@@ -272,6 +309,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         live: false,
         title: webinar.title,
         introText: webinar.intro_text,
+        introImageUrl,
+        preRegistrationForm,
         nextSessionAt: bookable[0] ?? session.nextSessionAt,
         upcoming: bookable,
         registeredSessionAt: liveReg?.session_start_at ?? null,
@@ -298,6 +337,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
       live: true,
       title: webinar.title,
       introText: webinar.intro_text,
+      introImageUrl,
+      preRegistrationForm,
       durationSeconds: webinar.duration_seconds,
       sessionStartAt: session.sessionStartAt,
       offsetSeconds: session.offsetSeconds,
@@ -726,6 +767,8 @@ function serializeWebinar(row: Webinar) {
     accountId: row.account_id,
     title: row.title,
     introText: row.intro_text,
+    introImageUrl: row.intro_image_url,
+    preRegistrationFormId: row.pre_registration_form_id,
     slug: row.slug,
     status: row.status,
     videoPrefix: row.video_prefix,
@@ -746,6 +789,8 @@ interface WebinarBody {
   status?: string;
   videoPrefix?: string | null;
   introText?: string | null;
+  introImageUrl?: string | null;
+  preRegistrationFormId?: string | null;
   durationSeconds?: number;
   schedule?: unknown[];
   cta?: { label?: string; url?: string; showAtSeconds?: number } | null;
@@ -802,6 +847,12 @@ function validateWebinarBody(
     input.videoPrefix = body.videoPrefix?.replace(/^\/+|\/+$/g, '') || null;
   }
   if (body.introText !== undefined) input.introText = body.introText;
+  if (body.introImageUrl !== undefined) {
+    input.introImageUrl = body.introImageUrl?.trim() || null;
+  }
+  if (body.preRegistrationFormId !== undefined) {
+    input.preRegistrationFormId = body.preRegistrationFormId?.trim() || null;
+  }
   if (body.durationSeconds !== undefined) {
     input.durationSeconds = Math.floor(body.durationSeconds);
   }

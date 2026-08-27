@@ -2161,6 +2161,9 @@ export type Webinar = {
   slug: string
   status: 'draft' | 'active' | 'archived'
   videoPrefix: string | null
+  introText?: string | null
+  introImageUrl?: string | null
+  preRegistrationFormId?: string | null
   durationSeconds: number
   schedule: WebinarScheduleRule[]
   cta: { label: string; url: string; showAtSeconds: number } | null
