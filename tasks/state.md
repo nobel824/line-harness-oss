@@ -31,7 +31,12 @@ AI顧問アカウント（`tatsuki | AI顧問` @288pnjfn / accountId `db3ca401-2
   `GOOGLE_OAUTH_CLIENT_ID_AIKOMON` / `GOOGLE_OAUTH_CLIENT_SECRET_AIKOMON`
 - Worker `ai-komon` の secret に投入済み（`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`）。
   `oauth.configured: true` を確認。**wrangler secret list --name ai-komon** で確認できる
-- **未完**: ブラウザでの OAuth 承認（ユーザー操作）。認可URLは
+- **OAuth 承認 完了（2026-08-27）**。接続は `3d3c1513-9676-4ff8-9422-324b83cbfedf` /
+  `auth_type=oauth` / `calendar_id=primary` / `last_error=null`。
+  **承認したのは仕事用の Google アカウント**＝ここに予約と Meet が入る。
+  **プライベートは `nobel824@gmail.com`** で、これを `busy_calendar_ids` に入れて空き判定にだけ使う。
+  → 残るユーザー操作は「プライベートのカレンダーを仕事用アカウントへ共有」（権限は時間枠のみで足りる）
+- 認可URLの再発行は
   `POST /api/booking/admin/staff/<staffId>/google-calendar/oauth/start?account_id=<A>` で再発行する。
   **state の TTL は10分**（`booking.ts:49`）なので、ユーザーが開く直前に発行すること
 - redirect URI は `https://ai-komon.nobel824.workers.dev/api/booking/google-calendar/oauth/callback`
@@ -45,7 +50,16 @@ AI顧問アカウント（`tatsuki | AI顧問` @288pnjfn / accountId `db3ca401-2
   - 新規 `apps/worker/src/services/booking-calendar-sync.test.ts`
   - 変更 `google-calendar.ts` / `booking-calendar-sync.ts` / `routes/booking.ts` /
     `google-calendar.test.ts` / `booking-admin.test.ts` / `bootstrap.sql` / `bootstrap-meta.json`
-- **未完**: 受入条件の実行（db/worker の test と typecheck）と fresh Sonnet による独立レビュー
+- **完了・コミット済み `42e9502`**（407行追加）。検証は自分の手元で再実行して全部緑:
+  migration 採番 32本 / `packages/db` 161 tests / `apps/worker` 1011 tests / 両者 typecheck
+- 新エンドポイント `PUT /api/booking/admin/staff/:id/google-calendar/busy-calendars`
+  （body `{ busy_calendar_ids: string[] }`・最大10件・空配列でクリア）。
+  **既存の PUT google-calendar は使わない**（auth_type を service_account に固定しトークンを消すため、
+  OAuth 接続が壊れる）
+- **未デプロイ**。main へ merge すると `.github/workflows/deploy-cloudflare-worker.yml` が
+  worker をデプロイし、未適用の D1 migration（070）も自動で流す。手で流す必要はない
+- **PR を作るときは `--repo nobel824/line-harness-oss` を明示する**（フォークなので gh は既定で
+  本体 Shudesu を向く）
 
 **認証まわり**
 - `npx wrangler@4 login` で OAuth 認可済み（R2 / D1 が CLI から触れる）
