@@ -18,7 +18,7 @@ describe('buildJourneyFollowupText', () => {
     const text = buildJourneyFollowupText(
       'picker_no_registration', 'AI導入ライブ', pickerUrl, bookingUrl,
     );
-    expect(text).toContain('30分間隔');
+    expect(text).toContain('1時間ごと');
     expect(text).toContain(pickerUrl);
     expect(text).not.toContain(bookingUrl);
   });
@@ -35,9 +35,27 @@ describe('buildJourneyFollowupText', () => {
     const text = buildJourneyFollowupText(
       'submitted_no_booking_30m', 'AI導入ライブ', pickerUrl, bookingUrl,
     );
-    expect(text).toContain('回答の送信は完了');
+    expect(text).toContain('送信は完了');
     expect(text).toContain(bookingUrl);
     expect(text).not.toContain(pickerUrl);
+  });
+
+  // AC-5-7 / T-F: 本文はコード直書きなので、別商品向けの旧文言が
+  // 再混入しても型では検出できない。4ステージ全部を機械で見張る。
+  test('4ステージのどの本文にも別商品向けの旧文言が残っていない', () => {
+    const kinds = [
+      'picker_no_registration',
+      'registered_no_show',
+      'submitted_no_booking_30m',
+      'submitted_no_booking_24h',
+    ] as const;
+    const banned = ['21分', 'AI導入診断', '15分枠', '年商', '30分間隔', 'カメラ／マイクOFF'];
+    for (const kind of kinds) {
+      const text = buildJourneyFollowupText(kind, 'AI導入ライブ', pickerUrl, bookingUrl);
+      for (const word of banned) {
+        expect(text, `${kind} に「${word}」が残っている`).not.toContain(word);
+      }
+    }
   });
 });
 
