@@ -293,9 +293,15 @@ async function journeyCandidates(
              SELECT 1 FROM webinar_viewers v
              WHERE v.webinar_id = r.webinar_id AND v.friend_id = r.friend_id
                AND v.session_start_at = r.session_start_at
-               AND v.last_position_seconds >= (
-                 SELECT MIN(wc.at_seconds) FROM webinar_ctas wc
-                 WHERE wc.webinar_id = r.webinar_id AND wc.kind = 'form'
+               -- form CTA が無いウェビナーでは MIN() が NULL になり比較が NULL に
+               -- 評価されるため、視聴済みの人まで候補に残って「お会いできません
+               -- でした」が飛ぶ。COALESCE(0) で「見たら除外」の従来挙動に戻す。
+               AND v.last_position_seconds >= COALESCE(
+                 (
+                   SELECT MIN(wc.at_seconds) FROM webinar_ctas wc
+                   WHERE wc.webinar_id = r.webinar_id AND wc.kind = 'form'
+                 ),
+                 0
                )
            )
          GROUP BY r.webinar_id, r.friend_id

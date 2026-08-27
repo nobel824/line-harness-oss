@@ -191,7 +191,7 @@ describe('processWebinarFollowups', () => {
     }));
   });
 
-  test('registered_no_show の候補SQLは form CTA の最小秒を閾値にし、2997 を埋め込まない', async () => {
+  test('registered_no_show の候補SQLは form CTA の最小秒を COALESCE 付きで閾値にし、2997 を埋め込まない', async () => {
     const preparedSql: string[] = [];
     const db = {
       prepare(sql: string) {
@@ -217,6 +217,10 @@ describe('processWebinarFollowups', () => {
     expect(noShowSql).toContain('MIN(wc.at_seconds)');
     expect(noShowSql).toContain('last_position_seconds');
     expect(noShowSql).not.toContain('2997');
+    // form CTA が無いウェビナーでは MIN() が NULL になり、比較が NULL に評価されて
+    // 「視聴済みなのに除外されない」= 完走者に no_show が飛ぶ。COALESCE を外すと
+    // モック越しのテストは全部 green のまま沈黙故障するので、SQL 文字列で縛る。
+    expect(noShowSql).toMatch(/COALESCE\(\s*\(\s*SELECT MIN\(wc\.at_seconds\)/);
   });
 
   test('CTA到達済みの registered_no_show 候補は送らず skipped にする', async () => {
