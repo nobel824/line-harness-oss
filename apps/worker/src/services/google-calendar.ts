@@ -6,6 +6,7 @@ const TIMEZONE = 'Asia/Tokyo';
 export interface GoogleCalendarConfig {
   calendarId: string;
   accessToken: string;
+  busyCalendarIds?: string[];
 }
 
 export interface BusyInterval {
@@ -32,10 +33,13 @@ export class GoogleCalendarClient {
    */
   async getFreeBusy(timeMin: string, timeMax: string): Promise<BusyInterval[]> {
     const url = `${GCAL_BASE}/freeBusy`;
+    const calendarIds = Array.from(
+      new Set([this.config.calendarId, ...(this.config.busyCalendarIds ?? [])]),
+    );
     const body = {
       timeMin,
       timeMax,
-      items: [{ id: this.config.calendarId }],
+      items: calendarIds.map((id) => ({ id })),
     };
 
     const res = await fetch(url, {
@@ -53,11 +57,29 @@ export class GoogleCalendarClient {
     }
 
     const data = (await res.json()) as {
-      calendars?: Record<string, { busy?: { start: string; end: string }[] }>;
+      calendars?: Record<string, {
+        busy?: { start: string; end: string }[];
+        errors?: unknown[];
+      }>;
     };
 
-    const calendarData = data.calendars?.[this.config.calendarId];
-    return calendarData?.busy ?? [];
+    const busy: BusyInterval[] = [];
+    for (const calendarId of calendarIds) {
+      const calendarData = data.calendars?.[calendarId];
+      if (calendarData?.errors && calendarData.errors.length > 0) {
+        if (calendarId === this.config.calendarId) {
+          throw new Error(
+            `Google FreeBusy calendar error for ${calendarId}: ${JSON.stringify(calendarData.errors)}`,
+          );
+        }
+        console.warn(
+          `Google FreeBusy calendar error for ${calendarId}: ${JSON.stringify(calendarData.errors)}`,
+        );
+        continue;
+      }
+      busy.push(...(calendarData?.busy ?? []));
+    }
+    return busy;
   }
 
   /**
