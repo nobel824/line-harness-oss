@@ -18,7 +18,7 @@ describe('buildJourneyFollowupText', () => {
     const text = buildJourneyFollowupText(
       'picker_no_registration', 'AI導入ライブ', pickerUrl, bookingUrl,
     );
-    expect(text).toContain('1時間ごと');
+    expect(text).toContain('20時から開催');
     expect(text).toContain(pickerUrl);
     expect(text).not.toContain(bookingUrl);
   });
