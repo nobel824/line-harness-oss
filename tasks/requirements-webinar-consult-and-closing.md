@@ -1,5 +1,139 @@
 # 要件定義書｜相談ページの単体化（F-9）＋ アーカイブ期限リマインド（F-10）
 
+> # ⚠️ この版（v1）は誤りを含む。改訂するまで実装に入らない
+>
+> 2026-08-28 の Grok spec レビュー ＋ PM 自身の再検証で、**v1 の前提2つがコードと違っていた**ことが確定した。
+> **下の「改訂ノート」を読んでから本文を読むこと。本文の F-9 は却下済み、AC の多くは書き直しが要る。**
+
+---
+
+## 改訂ノート（2026-08-28・v2 を書くための入力）
+
+### A. v1 の致命的な誤り 2つ（どちらも実コードで再確認済み）
+
+**A-1. F-9 の前提「idToken だけで枠が出る」は誤り。`form_required` 403 がある。**
+
+`resolveWebinarCaller`（`routes/webinars.ts:131-144`）は確かに idToken だけで friendId を解決する。
+**しかしその先の `loadContext` に別のゲートがある**:
+
+```
+SELECT 1 FROM form_submissions fs
+  INNER JOIN webinar_ctas wc ON wc.form_id = fs.form_id
+ WHERE wc.webinar_id = ? AND fs.friend_id = ?
+→ if (!submitted) throw new WebinarConsultationError('form_required', 403);
+```
+（`services/webinar-consultation-booking.ts:113-121`）
+
+`consultation-slots` も `consultation-book` も `loadContext()` を通る。
+→ **相談フォーム未送信の人には枠が出ない。**
+→ F-10 の (c)＝「CTA を押していない人」は**定義上フォーム未送信**なので、
+  consult ページを作ってリンクを送っても **403 で開けない**。**F-9 は目的を達成しない。**
+
+PM が `resolveWebinarCaller` だけ読んで「確定事実」と書いたのが原因。
+`tasks/state.md` 側は「未確認・着手時に最初に確認する」と正しく書いていたのに、要件書で確定扱いに格上げしてしまった。
+
+**A-2. `page=form` を却下した理由が不正確。実は送信後に枠選択まで進む。**
+
+v1 は「`page=form` は送信すると『送信完了』で終わる（`client/form.ts:659`）」を根拠に却下したが、
+**`:659` は汎用フォームの成功画面**で、別経路だった。実際はこうなっている:
+
+```
+if (state.formDef.consultationWebinarSlug) {
+  await renderConsultationBooking(state.formDef.consultationWebinarSlug);
+} else {
+  renderSuccess();
+}
+```
+（`client/form.ts:1093-1096`）
+
+`consultationWebinarSlug` は `webinar_ctas → status='active' の webinars → is_active かつ
+booking_menu_id が非NULL の config` を辿って解決される（`routes/forms.ts:126-147`）。
+**相談フォーム `95a1355f` はこの条件を全部満たす**（CTA `f4396e5a` に紐付き・ウェビナー active・booking_menu_id あり）。
+
+### B. 結論: **F-9（新しい consult ページ）は不要。実装ゼロで済む。**
+
+`?page=form&id=95a1355f` のリンクを送るだけで、
+**フォーム記入 → 送信 → その場で枠選択 → 予約確定**まで繋がる。
+送信した時点で `form_required` も自然にクリアされるので、A-1 の壁も同時に消える。
+
+- **v2 では F-9 を削除**し、「(c) の行き先は `page=form&id=<相談フォームID>`」と書く
+- **URL の組み立て形式は着手時に確認**（LIFF URL / tracked_link のどちらの流儀に合わせるか）
+- `submitted_no_booking_*` の解禁も同じ道で解ける可能性があるが、
+  **既に送信済みの人が再度 `page=form` を開いたときの挙動は未確認**（再送信になるのか、枠選択に直行するのか）
+
+### C. 今回ユーザーから出た変更 4つ（v2 に機能要件として書く）
+
+| # | 変更 | 決定日 | 覆した過去の決定 |
+|---|---|---|---|
+| C-1 | **ウェビナー案内を特典応答の2バブル目から外し、翌日の push に移す** | 2026-08-28 | state.md ①「当日・同一応答内の2バブル」 |
+| C-2 | **案内の配信時刻は 19:00** | 2026-08-28 | 既存シナリオ `5202064a` は 18:30 |
+| C-3 | **セッション選択に出る枠は「画面を開いた日から3日後以降」**（friend ごとではなく `now + 3日` 起点。実装が軽いほうをユーザーが選択） | 2026-08-28 | state.md ②-旧「最短視聴可能時刻は現状維持＝当日の直近の枠」 |
+| C-4 | **既存シナリオ `5202064a`（未クリック者への翌日再送）を、案内本体に作り替える**。`tag_not_exists` 条件を外して全員に送る | 2026-08-28 | — |
+
+**C-1 のコスト（ユーザーに提示済み・承知のうえでの決定）**: 応答メッセージ（Reply API）は課金対象外 `[公式]` なので
+いま案内は **0通で配れている**。翌日 push に移すと**案内が課金1通 × 全員分**乗る。残枠 約2,000通 `[実測]`、
+分母の月間新規特典請求者数は**未実測**。
+**C-4 により通数の増分は抑えられる**（もともと未クリック者には送っていた枠を流用するため）。
+
+**C-1 + C-3 の副作用**: 特典受け取りから視聴まで**最短4日**空く（翌日案内 ＋ 3日後の枠）。
+「熱は待つと下がる」`[実測]`（`2026-0802-warm-leads-die-at-the-form`・自社で返信13名→フォーム回答3名）
+と衝突するが、**「何日空けるのが正解か」の公開データは存在しない** `[実証・該当なしの確認]`
+（`2026-0803-no-public-data-on-step-completion`）。**測れる形にして段別カウントで見る**しかない。
+
+**C-4 で失うもの**: 「案内を見なかった人への再フォロー」が消える。
+ユーザー判断は「まず作り替えて出し、段別カウントで案内を開かない人が何人いるか 測ってから再フォローを戻すか決める」。
+
+### D. Grok spec レビューの指摘（v2 で必ず潰す）
+
+**致命**
+1. A-1 の `form_required`（上記）。AC-9-1 / 9-3 / 10-3 は現行 API 契約では pass できない
+
+**重要**
+2. **テーブルを取り違えている。** 旅程ステージは `webinar_journey_followups` であって `webinar_followups` ではない
+   （`webinar-followups.ts:267-270, 330-334`）。AC-10-6 / AC-10-9 の検証SQLが誤り
+3. **`kind` に CHECK 制約がある。** `webinar_followups.kind` は `after_30m`/`after_24h` のみ（`bootstrap.sql:1054`）、
+   `webinar_journey_followups.kind` は既存4値のみ（同 `:1089-1093` / `060_webinar_journey_followups.sql:37-42`）。
+   **migration なしで INSERT すると cron がその行で例外を投げる**
+4. **UNIQUE は `friend × webinar × kind` で session を含まない**（`060_…sql:50`）。
+   AC-10-6 は「friend × webinar × session」と書いており矛盾する。2回目の予約回に1通も送れなくなる
+5. **`journeyCandidates` の else 分岐が `submitted_no_booking_*`**（`webinar-followups.ts:341-390`）。
+   新 kind を専用枝なしで足すと母数が「フォーム送信済み・未予約」になり **AC-10-2 の逆**になる
+6. **新SQLが throw すると既存追客も全部止まる。** `processWebinarFollowups` は候補SQLを
+   **ループの前に全部 await** している（`:446-463`）。`archive_closing` の SQL が落ちると
+   その tick の `after_30m` も `registered_no_show` も送られない
+7. **「ステージ排他なので5通にならない」は誤り。** 既存4ステージは到達段で分かれるが、
+   `archive_closing` は**時間軸**なので `registered_no_show` と重なる。未視聴者は両方受け取る
+8. **AC-9-3 の期待ステータスが誤り。** 新規確定は **201**（`webinars.ts:707`・既存テスト `webinars.test.ts:917`）。200 を正にすると成功予約が fail する
+9. **AC-9-1 の `slots.length > 0` はカレンダーの空き次第**で、0件も正常系（`webinar/main.tsx:1405-1408`）。実装が正しくても fail しうる
+10. **「未行動」が未定義**（AC-10-1）。CTAクリック済／予約済／`registered_no_show` 既送のどれを行動とみなすか決まっていない
+11. **CTAクリック済・フォーム未送信の人の分岐が無い。** `after_30m`/`after_24h` の母数（`:177`）と重なり、
+    期限前にもう1通行き得る
+12. AC-10-3/4/5 は**本文が未執筆**なので pass/fail できない。観測点が URL 含有だけになっている
+13. AC-10-7 の「SQL 文字列に COALESCE があること」は挙動の pass/fail ではない。
+    archive_closing で「視聴したら除外」なのか (c) 扱いなのかを AC に書く必要がある
+
+**軽微**
+14. `webinar/main.tsx:1390-1460` は枠グリッドだけでなく**送信後シートの文言込み**。切り出すと視聴画面用コピーが残る
+15. AC-9-5 の 404 は `booking_menu_id` 欠如だけでなく **`is_active = 1` 必須**でも起きる（`:102`）
+16. `friend_not_found` 403（`webinars.ts:142`）が AC に無い
+17. `apps/liff/src/legacy-route.ts:39-42` は未知 `page` を `/booking` に落とす。
+    **本番 LIFF が本当に worker クライアントだけかは未確認**
+
+**Grok が未確認と明記した点**: 本番 DB は叩いていない（「本番ウェビナーは `eec8dea0` の1件」「form CTA は 2997」は
+state.md の記録に依拠）。→ **これは PM が別途 API で実測済み・一致している。**
+
+### E. v2 を書くときの構成案
+
+- **F-9 を削除**し、「(c) の行き先 = `page=form&id=<相談フォームID>`（実装ゼロ）」を前提に格下げ
+- **F-9'（新）: 案内の配信タイミング変更**（C-1 / C-2 / C-4）
+- **F-10'（新）: セッション選択を `now + 3日` 以降に**（C-3）
+- **F-11: `archive_closing`**（旧 F-10。D の 2〜13 を全部反映）
+- AC は EARS を維持。ただし**検証手段は「そのコマンドで本当に pass/fail が割れるか」を1件ずつ確かめてから書く**
+- **本文の実文を先に書く**（`writing-consult` を引く）。本文が無いと AC-10-3/4/5 が検証不能のまま
+
+---
+
+
 作成: 2026-08-28 / 正本 `tasks/requirements-auto-webinar-funnel.md` の続き（F-1〜F-8 の続き番号を使う）
 状態: **未着手**。設計判断の経緯と根拠は `tasks/state.md` の「2026-08-28 の決定」節が正本。
 
@@ -63,7 +197,10 @@
 
 > **危険 zone（DB migration を含む）のため AC は EARS 形式（When … , the system shall …）で書く。**
 
-### F-9 相談枠ピッカーの単体ページ
+### ~~F-9 相談枠ピッカーの単体ページ~~ 【却下・改訂ノート B を見よ】
+
+> **この節は無効。** `form_required` により目的を達成せず、かつ `page=form` で実装ゼロで済むことが判明した。
+
 
 | ID | Acceptance Criteria（EARS） | 検証手段 |
 |---|---|---|
