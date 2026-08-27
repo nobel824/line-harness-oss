@@ -11,7 +11,7 @@ import {
   type WebinarCtaCard,
   type Webinar,
   type WebinarSakuraComment,
-  type WebinarAnalytics,
+  type WebinarAnalytics as BaseWebinarAnalytics,
   type WebinarUserComment,
 } from '@/lib/api'
 
@@ -33,6 +33,37 @@ function fmtSession(epoch: number): string {
 
 const inputClass =
   'w-full border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+
+type WebinarJourneyStatusCounts = {
+  pending: number
+  sent: number
+  failed: number
+}
+
+type WebinarJourneyFollowupStatusCounts = WebinarJourneyStatusCounts & {
+  skipped: number
+}
+
+type WebinarJourneyAnalytics = {
+  pickerOpens: number
+  registrations: number
+  viewers: number
+  formSubmissions: number
+  followups: {
+    after_30m: WebinarJourneyStatusCounts
+    after_24h: WebinarJourneyStatusCounts
+  }
+  journeyFollowups: {
+    picker_no_registration: WebinarJourneyFollowupStatusCounts
+    registered_no_show: WebinarJourneyFollowupStatusCounts
+    submitted_no_booking_30m: WebinarJourneyFollowupStatusCounts
+    submitted_no_booking_24h: WebinarJourneyFollowupStatusCounts
+  }
+}
+
+type WebinarAnalyticsWithJourney = BaseWebinarAnalytics & {
+  journey?: WebinarJourneyAnalytics
+}
 
 function CommentsTab({ webinarId }: { webinarId: string }) {
   const [comments, setComments] = useState<WebinarSakuraComment[]>([])
@@ -241,7 +272,7 @@ function ParticipantAvatar({
 }
 
 function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durationSeconds: number }) {
-  const [analytics, setAnalytics] = useState<WebinarAnalytics | null>(null)
+  const [analytics, setAnalytics] = useState<WebinarAnalyticsWithJourney | null>(null)
   const [userComments, setUserComments] = useState<WebinarUserComment[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -249,7 +280,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
     setError(null)
     Promise.all([webinarApi.analytics(webinarId), webinarApi.userComments(webinarId)])
       .then(([analyticsRes, commentsRes]) => {
-        setAnalytics(analyticsRes.data)
+        setAnalytics(analyticsRes.data as WebinarAnalyticsWithJourney)
         setUserComments(commentsRes.data)
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
@@ -265,6 +296,10 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
   if (!analytics) return <div className="text-gray-500 text-sm">読み込み中...</div>
 
   const { summary } = analytics
+  // apps/web(Pages) と apps/worker(Workers) は別デプロイなので、web が先に出ると
+  // journey が無いレスポンスが返る。分割代入すると分析画面ごと落ちるため、
+  // 欠けていたらそのセクションだけ描かない。
+  const journey = analytics.journey ?? null
   const maxDropoff = Math.max(1, ...analytics.dropoff.map((d) => d.viewers))
   const daily = analytics.daily.slice(-14)
   const maxDaily = Math.max(
@@ -281,6 +316,47 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
     { label: '送信完了', value: analytics.formFunnel.submitSuccesses },
   ]
   const maxFormFunnel = Math.max(1, ...formFunnelStages.map((stage) => stage.value))
+  const journeyStages = journey === null ? [] : [
+    { label: 'ピッカー表示', value: journey.pickerOpens, dot: 'bg-slate-500' },
+    { label: 'ウェビナー予約', value: journey.registrations, dot: 'bg-blue-500' },
+    { label: '視聴開始', value: journey.viewers, dot: 'bg-cyan-500' },
+    { label: 'フォーム送信', value: journey.formSubmissions, dot: 'bg-emerald-500' },
+  ]
+  const followupStatuses = [
+    { key: 'pending', label: '待ち' },
+    { key: 'sent', label: '送信済み' },
+    { key: 'failed', label: '失敗' },
+  ] as const
+  const journeyFollowupStatuses = [
+    ...followupStatuses,
+    { key: 'skipped', label: '対象外' },
+  ] as const
+  const followupKinds = [
+    { key: 'after_30m', label: 'CTA後 30分' },
+    { key: 'after_24h', label: 'CTA後 24時間' },
+  ] as const
+  const journeyFollowupKinds = [
+    { key: 'picker_no_registration', label: '表示 → 未予約' },
+    { key: 'registered_no_show', label: '予約 → 未視聴' },
+    { key: 'submitted_no_booking_30m', label: '送信 → 未予約 30分' },
+    { key: 'submitted_no_booking_24h', label: '送信 → 未予約 24時間' },
+  ] as const
+  const failedFollowupCount =
+    journey === null
+      ? 0
+      : followupKinds.reduce((total, kind) => total + journey.followups[kind.key].failed, 0) +
+        journeyFollowupKinds.reduce(
+          (total, kind) => total + journey.journeyFollowups[kind.key].failed,
+          0,
+        )
+  const statusTone = (status: string, count: number): string => {
+    if (status === 'failed' && count > 0) return 'border-red-200 bg-red-50 text-red-700'
+    // 0 を警告色にするのは sent だけ。pending / failed / skipped の 0 は健全な状態で、
+    // ここを黄色にすると「滞留」と読めてしまい、本当の未到達が埋もれる。
+    if (status === 'sent' && count === 0) return 'border-amber-200 bg-amber-50 text-amber-700'
+    if (status === 'sent') return 'border-emerald-100 bg-emerald-50 text-emerald-700'
+    return 'border-slate-200 bg-slate-50 text-slate-700'
+  }
   const fieldLabels: Record<string, string> = {
     name: 'お名前',
     company: '会社名・屋号',
@@ -419,6 +495,95 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
           </details>
         )}
       </section>
+
+      {journey !== null && (
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="font-bold text-slate-900">オートウェビナー導線の段別カウント</h3>
+            <p className="mt-1 text-xs text-slate-500">全期間の記録。黄色の 0 件は、その段にまだ到達していません。</p>
+          </div>
+          {failedFollowupCount > 0 && (
+            <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700">
+              追客の失敗 {failedFollowupCount.toLocaleString('ja-JP')}件
+            </span>
+          )}
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          {journeyStages.map((stage) => {
+            const isEmpty = stage.value === 0
+            return (
+              <div
+                key={stage.label}
+                className={`rounded-xl border p-3 ${isEmpty ? 'border-amber-200 bg-amber-50' : 'border-slate-100 bg-slate-50'}`}
+              >
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                  <span className={`h-2 w-2 rounded-full ${stage.dot}`} />
+                  {stage.label}
+                </div>
+                <div className={`mt-2 text-2xl font-bold ${isEmpty ? 'text-amber-700' : 'text-slate-950'}`}>
+                  {stage.value.toLocaleString('ja-JP')}件
+                </div>
+                {isEmpty && <div className="mt-1 text-[11px] font-medium text-amber-700">未到達</div>}
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-800">CTA 追客</h4>
+              <p className="mt-1 text-[11px] text-slate-500">webinar_followups の kind × status</p>
+            </div>
+            <div className="mt-3 space-y-3">
+              {followupKinds.map((kind) => (
+                <div key={kind.key}>
+                  <div className="mb-2 text-xs font-semibold text-slate-700">{kind.label}</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {followupStatuses.map((status) => {
+                      const count = journey.followups[kind.key][status.key]
+                      return (
+                        <div key={status.key} className={`rounded-lg border px-2 py-2 ${statusTone(status.key, count)}`}>
+                          <div className="text-[10px] font-medium">{status.label}</div>
+                          <div className="mt-1 text-sm font-bold">{count.toLocaleString('ja-JP')}件</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-800">導線追客</h4>
+              <p className="mt-1 text-[11px] text-slate-500">webinar_journey_followups の kind × status</p>
+            </div>
+            <div className="mt-3 space-y-3">
+              {journeyFollowupKinds.map((kind) => (
+                <div key={kind.key}>
+                  <div className="mb-2 text-xs font-semibold text-slate-700">{kind.label}</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {journeyFollowupStatuses.map((status) => {
+                      const count = journey.journeyFollowups[kind.key][status.key]
+                      return (
+                        <div key={status.key} className={`rounded-lg border px-2 py-2 ${statusTone(status.key, count)}`}>
+                          <div className="text-[10px] font-medium">{status.label}</div>
+                          <div className="mt-1 text-sm font-bold">{count.toLocaleString('ja-JP')}件</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1.4fr)]">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

@@ -37,6 +37,7 @@ import {
   getWebinarAnalyticsSummary,
   getWebinarDailyStats,
   getWebinarFormFunnelStats,
+  getWebinarJourneyStats,
   getFriendByLineUserId,
   getFriendByLineUserIdForAccount,
   getFormById,
@@ -1022,13 +1023,14 @@ webinarRoutes.get('/api/webinars/:id/analytics', async (c) => {
     const row = await getWebinarById(c.env.DB, id);
     if (!row) return c.json({ success: false, error: 'Not found' }, 404);
     const completionThreshold = Math.max(1, Math.floor(row.duration_seconds * 0.9));
-    const [sessions, dropoff, participants, summary, daily, formFunnel] = await Promise.all([
+    const [sessions, dropoff, participants, summary, daily, formFunnel, journey] = await Promise.all([
       getWebinarSessionStats(c.env.DB, id),
       getWebinarDropoff(c.env.DB, id),
       getWebinarParticipantStats(c.env.DB, id, 200),
       getWebinarAnalyticsSummary(c.env.DB, id, completionThreshold),
       getWebinarDailyStats(c.env.DB, id),
       getWebinarFormFunnelStats(c.env.DB, id),
+      getWebinarJourneyStats(c.env.DB, id),
     ]);
     return c.json({
       success: true,
@@ -1084,6 +1086,14 @@ webinarRoutes.get('/api/webinars/:id/analytics', async (c) => {
             fieldName: field.field_name,
             users: field.users,
           })),
+        },
+        journey: {
+          pickerOpens: journey.picker_opens,
+          registrations: journey.registrations,
+          viewers: journey.viewers,
+          formSubmissions: journey.form_submissions,
+          followups: journey.followups,
+          journeyFollowups: journey.journey_followups,
         },
       },
     });
