@@ -62,7 +62,7 @@ type WebinarJourneyAnalytics = {
 }
 
 type WebinarAnalyticsWithJourney = BaseWebinarAnalytics & {
-  journey: WebinarJourneyAnalytics
+  journey?: WebinarJourneyAnalytics
 }
 
 function CommentsTab({ webinarId }: { webinarId: string }) {
@@ -295,7 +295,11 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
   }
   if (!analytics) return <div className="text-gray-500 text-sm">読み込み中...</div>
 
-  const { summary, journey } = analytics
+  const { summary } = analytics
+  // apps/web(Pages) と apps/worker(Workers) は別デプロイなので、web が先に出ると
+  // journey が無いレスポンスが返る。分割代入すると分析画面ごと落ちるため、
+  // 欠けていたらそのセクションだけ描かない。
+  const journey = analytics.journey ?? null
   const maxDropoff = Math.max(1, ...analytics.dropoff.map((d) => d.viewers))
   const daily = analytics.daily.slice(-14)
   const maxDaily = Math.max(
@@ -312,7 +316,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
     { label: '送信完了', value: analytics.formFunnel.submitSuccesses },
   ]
   const maxFormFunnel = Math.max(1, ...formFunnelStages.map((stage) => stage.value))
-  const journeyStages = [
+  const journeyStages = journey === null ? [] : [
     { label: 'ピッカー表示', value: journey.pickerOpens, dot: 'bg-slate-500' },
     { label: 'ウェビナー予約', value: journey.registrations, dot: 'bg-blue-500' },
     { label: '視聴開始', value: journey.viewers, dot: 'bg-cyan-500' },
@@ -338,11 +342,18 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
     { key: 'submitted_no_booking_24h', label: '送信 → 未予約 24時間' },
   ] as const
   const failedFollowupCount =
-    followupKinds.reduce((total, kind) => total + journey.followups[kind.key].failed, 0) +
-    journeyFollowupKinds.reduce((total, kind) => total + journey.journeyFollowups[kind.key].failed, 0)
+    journey === null
+      ? 0
+      : followupKinds.reduce((total, kind) => total + journey.followups[kind.key].failed, 0) +
+        journeyFollowupKinds.reduce(
+          (total, kind) => total + journey.journeyFollowups[kind.key].failed,
+          0,
+        )
   const statusTone = (status: string, count: number): string => {
     if (status === 'failed' && count > 0) return 'border-red-200 bg-red-50 text-red-700'
-    if (count === 0) return 'border-amber-200 bg-amber-50 text-amber-700'
+    // 0 を警告色にするのは sent だけ。pending / failed / skipped の 0 は健全な状態で、
+    // ここを黄色にすると「滞留」と読めてしまい、本当の未到達が埋もれる。
+    if (status === 'sent' && count === 0) return 'border-amber-200 bg-amber-50 text-amber-700'
     if (status === 'sent') return 'border-emerald-100 bg-emerald-50 text-emerald-700'
     return 'border-slate-200 bg-slate-50 text-slate-700'
   }
@@ -485,6 +496,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
         )}
       </section>
 
+      {journey !== null && (
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -571,6 +583,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
           </div>
         </div>
       </section>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1.4fr)]">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
