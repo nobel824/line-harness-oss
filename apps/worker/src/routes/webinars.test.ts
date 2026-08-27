@@ -19,6 +19,7 @@ const dbMocks = {
   insertWebinarUserComment: vi.fn(),
   countSessionUserComments: vi.fn(),
   getWebinarUserComments: vi.fn(),
+  getMyWebinarSessionComments: vi.fn(),
   getWebinarSessionStats: vi.fn(),
   getWebinarDropoff: vi.fn(),
   getWebinarParticipantStats: vi.fn(),
@@ -108,6 +109,7 @@ beforeEach(() => {
   dbMocks.getWebinarComments.mockResolvedValue([
     { id: 'c1', webinar_id: 'w1', at_seconds: 10, author_name: '田中', body: '楽しみ!', created_at: 'x' },
   ]);
+  dbMocks.getMyWebinarSessionComments.mockResolvedValue([]);
   dbMocks.upsertWebinarViewer.mockResolvedValue({ firstJoin: true });
   dbMocks.getWebinarCtas.mockResolvedValue([]);
   dbMocks.getWebinarJourneyStats.mockResolvedValue({
@@ -174,6 +176,50 @@ describe('GET /api/liff/webinars/:slug', () => {
     expect(body.registeredSessionAt).toBeNull();
     expect(body.registeredForThisSession).toBe(true);
     expect(dbMocks.upsertWebinarViewer).toHaveBeenCalledWith({}, 'w1', 'friend-1', SESSION_START);
+    expect(body.myComments).toEqual([]);
+    expect(dbMocks.getMyWebinarSessionComments).toHaveBeenCalledWith(
+      expect.anything(), 'w1', 'friend-1', SESSION_START,
+    );
+  });
+
+  test('ライブ中の /state は自分のコメントだけを myComments に含め、他人は呼ばない', async () => {
+    dbMocks.getMyWebinarSessionComments.mockResolvedValue([
+      { id: 'mine-1', at_seconds: 15, body: '自分の発言' },
+      { id: 'mine-2', at_seconds: 40, body: 'もう一言' },
+    ]);
+    const res = await req('/api/liff/webinars/test-webinar', {
+      headers: { Authorization: 'Bearer token' },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.myComments).toEqual([
+      { atSeconds: 15, body: '自分の発言' },
+      { atSeconds: 40, body: 'もう一言' },
+    ]);
+    expect(JSON.stringify(body.myComments)).not.toContain('他人');
+    expect(dbMocks.getMyWebinarSessionComments).toHaveBeenCalledWith(
+      expect.anything(), 'w1', 'friend-1', SESSION_START,
+    );
+    expect(dbMocks.getMyWebinarSessionComments).toHaveBeenCalledTimes(1);
+  });
+
+  test('待機ルームの /state も自分のコメントだけを返す', async () => {
+    vi.setSystemTime(new Date((SESSION_START - 300) * 1000));
+    dbMocks.getUpcomingWebinarRegistration.mockResolvedValue({
+      id: 'reg-next', webinar_id: 'w1', friend_id: 'friend-1',
+      session_start_at: SESSION_START, notified_at: null, created_at: 'x',
+    });
+    dbMocks.getMyWebinarSessionComments.mockResolvedValue([
+      { id: 'mine-w', at_seconds: -60, body: '待機中の自分' },
+    ]);
+    const res = await req('/api/liff/webinars/test-webinar', {
+      headers: { Authorization: 'Bearer t' },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.waiting).toBe(true);
+    expect(body.myComments).toEqual([{ atSeconds: -60, body: '待機中の自分' }]);
+    expect(dbMocks.getMyWebinarSessionComments).toHaveBeenCalledWith(
+      expect.anything(), 'w1', 'friend-1', SESSION_START,
+    );
   });
 
   test('friend はウェビナーのアカウント配下の行を優先解決する', async () => {

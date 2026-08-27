@@ -24,6 +24,8 @@ interface SerializedAutoReply {
   matchType: 'exact' | 'contains';
   responseType: string;
   responseContent: string;
+  responseType2?: string | null;
+  responseContent2?: string | null;
   templateId: string | null;
   lineAccountId: string | null;
   isActive: boolean;
@@ -38,11 +40,20 @@ function serializeAutoReply(row: DbAutoReply): SerializedAutoReply {
     matchType: row.match_type,
     responseType: row.response_type,
     responseContent: row.response_content,
+    responseType2: row.response_type_2 ?? null,
+    responseContent2: row.response_content_2 ?? null,
     templateId: row.template_id,
     lineAccountId: row.line_account_id,
     isActive: Boolean(row.is_active),
     createdAt: row.created_at,
   };
+}
+
+function emptyToNull(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  // 空白だけの本文を保存させない。2通目に入ると LINE 側で弾かれ、
+  // 配列ごと1回の API 呼び出しなので1通目まで道連れで失敗する。
+  return value.trim() === '' ? null : value;
 }
 
 /**
@@ -155,6 +166,8 @@ autoReplies.post('/api/auto-replies', async (c) => {
       matchType?: 'exact' | 'contains';
       responseType?: string;
       responseContent?: string;
+      responseType2?: string | null;
+      responseContent2?: string | null;
       templateId?: string | null;
       lineAccountId?: string | null;
     }>();
@@ -187,6 +200,8 @@ autoReplies.post('/api/auto-replies', async (c) => {
       matchType: body.matchType,
       responseType: resolvedResponseType,
       responseContent: resolvedResponseContent,
+      responseType2: emptyToNull(body.responseType2),
+      responseContent2: emptyToNull(body.responseContent2),
       templateId: body.templateId ?? null,
       lineAccountId: body.lineAccountId ?? null,
     });
@@ -207,6 +222,8 @@ autoReplies.put('/api/auto-replies/:id', async (c) => {
       matchType?: 'exact' | 'contains';
       responseType?: string;
       responseContent?: string;
+      responseType2?: string | null;
+      responseContent2?: string | null;
       templateId?: string | null;
       lineAccountId?: string | null;
       isActive?: boolean;
@@ -217,6 +234,8 @@ autoReplies.put('/api/auto-replies/:id', async (c) => {
     if (body.matchType !== undefined) input.matchType = body.matchType;
     if (body.responseType !== undefined) input.responseType = body.responseType;
     if (body.responseContent !== undefined) input.responseContent = body.responseContent;
+    if ('responseType2' in body) input.responseType2 = emptyToNull(body.responseType2);
+    if ('responseContent2' in body) input.responseContent2 = emptyToNull(body.responseContent2);
     if ('templateId' in body) input.templateId = body.templateId;
     if ('lineAccountId' in body) input.lineAccountId = body.lineAccountId;
     if (body.isActive !== undefined) input.isActive = body.isActive;

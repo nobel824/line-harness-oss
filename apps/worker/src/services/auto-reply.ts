@@ -71,6 +71,38 @@ async function resolveAutoReplyLiffId(
   return liffIdFromUrl(fallbackLiffUrl);
 }
 
+async function buildExpandedReplyMessage(
+  db: D1Database,
+  friend: Friend,
+  resolvedMeta: Record<string, unknown>,
+  messageType: string,
+  content: string,
+  opts: {
+    lineAccountId: string | null;
+    workerUrl?: string;
+    liffUrl?: string;
+  },
+): Promise<Message> {
+  let expandedContent = expandVariables(
+    content,
+    { ...friend, metadata: resolvedMeta },
+    opts.workerUrl,
+    messageType,
+  );
+  if (/\{\{\s*liff_id\s*\}\}/.test(expandedContent)) {
+    const liffId = await resolveAutoReplyLiffId(db, opts.lineAccountId, opts.liffUrl);
+    if (!liffId) {
+      throw new Error('LIFF ID is not configured for the matched LINE account');
+    }
+    expandedContent = renderBroadcastMessageContent(
+      messageType,
+      expandedContent,
+      { liffId },
+    );
+  }
+  return buildMessage(messageType, expandedContent);
+}
+
 /**
  * incomingText を auto_replies (このアカウントのルール + グローバルルール) に
  * マッチさせ、最初にマッチしたルールで replyMessage を送って messages_log に
@@ -120,43 +152,54 @@ export async function matchAndReply(
   try {
     const resolvedMeta = await resolveMetadata(db, friend);
     const resolved = await resolveAutoReplyContent(db, rule);
-    let expandedContent = expandVariables(
-      resolved.content,
-      { ...friend, metadata: resolvedMeta },
-      workerUrl,
+    const replyMsg = await buildExpandedReplyMessage(
+      db,
+      friend,
+      resolvedMeta,
       resolved.messageType,
+      resolved.content,
+      { lineAccountId, workerUrl, liffUrl },
     );
-    if (/\{\{\s*liff_id\s*\}\}/.test(expandedContent)) {
-      const liffId = await resolveAutoReplyLiffId(db, lineAccountId, liffUrl);
-      if (!liffId) {
-        throw new Error('LIFF ID is not configured for the matched LINE account');
-      }
-      expandedContent = renderBroadcastMessageContent(
-        resolved.messageType,
-        expandedContent,
-        { liffId },
+    const messages: Message[] = [replyMsg];
+
+    // 空白だけの2通目を送ると LINE 側で弾かれ、配列ごと1回の API 呼び出しなので
+    // 1通目まで道連れで失敗する。trim して「実質空」を1通扱いに寄せる。
+    const secondContent = rule.response_content_2?.trim() ? rule.response_content_2 : null;
+    if (secondContent != null) {
+      const secondType = rule.response_type_2 ?? rule.response_type;
+      messages.push(
+        await buildExpandedReplyMessage(
+          db,
+          friend,
+          resolvedMeta,
+          secondType,
+          secondContent,
+          { lineAccountId, workerUrl, liffUrl },
+        ),
       );
     }
-    const replyMsg = buildMessage(resolved.messageType, expandedContent);
+
     if (replyMessage) {
-      await replyMessage(replyToken, [replyMsg]);
+      await replyMessage(replyToken, messages);
     } else {
-      await lineClient.replyMessage(replyToken, [replyMsg]);
+      await lineClient.replyMessage(replyToken, messages);
     }
     replyTokenConsumed = true;
 
     // 送信ログ（replyMessage = 無料）— derive content from the built reply
     // message so any cleanEmptyNodes / parse-failure fallback is reflected
-    // in the dashboard.
-    const replyPayload = messageToLogPayload(replyMsg);
-    await logOutgoingMessage(db, {
-      friendId: friend.id,
-      messageType: replyPayload.messageType,
-      content: replyPayload.content,
-      deliveryType: 'reply',
-      source: 'auto_reply',
-      lineAccountId,
-    });
+    // in the dashboard. 2通送ったときは2件記録する。
+    for (const sent of messages) {
+      const replyPayload = messageToLogPayload(sent);
+      await logOutgoingMessage(db, {
+        friendId: friend.id,
+        messageType: replyPayload.messageType,
+        content: replyPayload.content,
+        deliveryType: 'reply',
+        source: 'auto_reply',
+        lineAccountId,
+      });
+    }
   } catch (err) {
     console.error(`Failed to send auto-reply${logContext ? ` (${logContext})` : ''}`, err);
   }

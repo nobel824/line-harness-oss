@@ -31,6 +31,7 @@ import {
   insertWebinarUserComment,
   countSessionUserComments,
   getWebinarUserComments,
+  getMyWebinarSessionComments,
   getWebinarSessionStats,
   getWebinarDropoff,
   getWebinarParticipantStats,
@@ -211,9 +212,12 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
 
       const exp = now + webinar.duration_seconds + TOKEN_GRACE_SECONDS;
       const token = await signWebinarToken(c.env.LINE_CHANNEL_SECRET, webinar.slug, exp);
-      const [comments, ctas] = await Promise.all([
+      const [comments, ctas, myCommentRows] = await Promise.all([
         getWebinarComments(c.env.DB, webinar.id),
         getWebinarCtas(c.env.DB, webinar.id),
+        getMyWebinarSessionComments(
+          c.env.DB, webinar.id, auth.friendId, requestedSessionStartAt,
+        ),
       ]);
       return c.json({
         live: true,
@@ -233,6 +237,10 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         comments: comments.map((cm) => ({
           atSeconds: cm.at_seconds,
           authorName: cm.author_name,
+          body: cm.body,
+        })),
+        myComments: myCommentRows.map((cm) => ({
+          atSeconds: cm.at_seconds,
           body: cm.body,
         })),
         ctas: ctas.map((ct) => ({
@@ -261,7 +269,10 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         next - now <= WAITING_ROOM_SECONDS &&
         reg?.session_start_at === next
       ) {
-        const comments = await getWebinarComments(c.env.DB, webinar.id);
+        const [comments, myCommentRows] = await Promise.all([
+          getWebinarComments(c.env.DB, webinar.id),
+          getMyWebinarSessionComments(c.env.DB, webinar.id, auth.friendId, next),
+        ]);
         return c.json({
           live: false,
           waiting: true,
@@ -274,6 +285,10 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
           comments: comments.map((cm) => ({
             atSeconds: cm.at_seconds,
             authorName: cm.author_name,
+            body: cm.body,
+          })),
+          myComments: myCommentRows.map((cm) => ({
+            atSeconds: cm.at_seconds,
             body: cm.body,
           })),
         });
@@ -336,9 +351,12 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
 
     const exp = session.sessionStartAt! + webinar.duration_seconds + TOKEN_GRACE_SECONDS;
     const token = await signWebinarToken(c.env.LINE_CHANNEL_SECRET, webinar.slug, exp);
-    const [comments, ctas] = await Promise.all([
+    const [comments, ctas, myCommentRows] = await Promise.all([
       getWebinarComments(c.env.DB, webinar.id),
       getWebinarCtas(c.env.DB, webinar.id),
+      getMyWebinarSessionComments(
+        c.env.DB, webinar.id, auth.friendId, session.sessionStartAt!,
+      ),
     ]);
 
     return c.json({
@@ -358,6 +376,10 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
       comments: comments.map((cm) => ({
         atSeconds: cm.at_seconds,
         authorName: cm.author_name,
+        body: cm.body,
+      })),
+      myComments: myCommentRows.map((cm) => ({
+        atSeconds: cm.at_seconds,
         body: cm.body,
       })),
       ctas: ctas.map((ct) => ({

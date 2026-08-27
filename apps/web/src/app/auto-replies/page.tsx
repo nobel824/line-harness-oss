@@ -19,6 +19,8 @@ interface AutoReply {
   matchType: 'exact' | 'contains'
   responseType: string
   responseContent: string
+  responseType2?: string | null
+  responseContent2?: string | null
   templateId: string | null
   lineAccountId: string | null
   isActive: boolean
@@ -157,6 +159,8 @@ export default function AutoRepliesPage() {
               matchType: 'exact',
               responseType: 'text',
               responseContent: '',
+              responseType2: null,
+              responseContent2: null,
               templateId: null,
               lineAccountId: selectedAccountId,
               isActive: true,
@@ -221,6 +225,8 @@ export default function AutoRepliesPage() {
                           matchType: r.matchType,
                           responseType: r.responseType,
                           responseContent: r.responseContent,
+                          responseType2: r.responseType2 ?? null,
+                          responseContent2: r.responseContent2 ?? null,
                           templateId: r.templateId,
                           lineAccountId: r.lineAccountId,
                           isActive: r.isActive,
