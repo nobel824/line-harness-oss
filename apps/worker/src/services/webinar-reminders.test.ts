@@ -57,7 +57,8 @@ describe('processWebinarReminders', () => {
       buildWebinarUrl('111-aaa', 'test-webinar', REG.session_start_at),
     );
     expect(body.messages[0].text).toContain(`sessionStartAt=${REG.session_start_at}`);
-    expect(body.messages[0].text).toContain('何度でも開けます');
+    expect(body.messages[0].text).toContain('配信のあと3日間は、このリンクから見返せます。');
+    expect(body.messages[0].text).not.toContain('何度でも開けます');
     expect(body.messages[0].text).toContain('まもなく');
     expect(proxyFetch.mock.invocationCallOrder[0]).toBeLessThan(
       dbMocks.markWebinarRegistrationNotified.mock.invocationCallOrder[0],
@@ -126,5 +127,8 @@ describe('sendWebinarRegistrationConfirmation', () => {
       buildWebinarUrl('111-aaa', 'test-webinar', NOW + 3600),
     );
     expect(body.messages[0].text).toContain('専用の入場リンク');
+    expect(body.messages[0].text).toContain('開始5分前にも同じリンクをお送りします。');
+    expect(body.messages[0].text).toContain('配信のあと3日間は、このリンクから見返せます。');
+    expect(body.messages[0].text).not.toContain('何度でも開けます');
   });
 });

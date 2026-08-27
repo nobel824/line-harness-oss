@@ -4,6 +4,7 @@
 
 import { getFriendById, getLineAccountById, jstNow } from '@line-crm/db';
 import { pushViaHarnessProxy, type HarnessProxyDispatch } from './line-proxy-send.js';
+import { ARCHIVE_WINDOW_DAYS } from './webinar-schedule.js';
 
 export type WebinarFollowupOptions = {
   proxyBaseUrl: string;
@@ -42,6 +43,15 @@ type JourneyCandidate = {
   title: string;
   booking_url: string | null;
   source_at: string;
+  duration_seconds?: number | null;
+  last_position_seconds?: number | null;
+  form_cta_at_seconds?: number | null;
+};
+
+export type RegisteredNoShowWatch = {
+  lastPositionSeconds: number | null;
+  formCtaAtSeconds: number | null;
+  durationSeconds: number;
 };
 
 type JourneyFollowupRow = {
@@ -64,12 +74,47 @@ function webinarPickerUrl(liffId: string, slug: string): string {
   );
 }
 
+function remainingWatchLine(durationSeconds: number, lastPositionSeconds: number): string {
+  const remainingSeconds = Math.max(0, durationSeconds - lastPositionSeconds);
+  if (remainingSeconds < 60) return '※残りはあと少しです。';
+  return `※残りは約${Math.round(remainingSeconds / 60)}分です。`;
+}
+
+function buildRegisteredNoShowText(
+  title: string,
+  pickerUrl: string,
+  watch?: RegisteredNoShowWatch,
+): string | null {
+  const lastPosition = watch?.lastPositionSeconds ?? null;
+  const ctaAt = watch?.formCtaAtSeconds ?? null;
+  if (lastPosition !== null && ctaAt !== null && lastPosition >= ctaAt) {
+    return null;
+  }
+  if (lastPosition !== null && ctaAt !== null && lastPosition < ctaAt && watch) {
+    return (
+      `「${title}」の続きがまだ残っています。\n\n` +
+      `いちばんお伝えしたいのは終盤です。\n` +
+      `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
+      `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。\n\n` +
+      remainingWatchLine(watch.durationSeconds, lastPosition)
+    );
+  }
+  return (
+    `ご予約いただいた「${title}」の回にお会いできませんでした。\n\n` +
+    `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。\n\n` +
+    `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
+    `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
+    `※約57分です。カメラ・マイクは使いません。`
+  );
+}
+
 export function buildJourneyFollowupText(
   kind: WebinarJourneyFollowupKind,
   title: string,
   pickerUrl: string,
   bookingUrl: string | null,
-): string {
+  watch?: RegisteredNoShowWatch,
+): string | null {
   switch (kind) {
     case 'picker_no_registration':
       return (
@@ -81,12 +126,7 @@ export function buildJourneyFollowupText(
         `※約57分です。カメラ・マイクは使いません。ご覧いただくだけで参加できます。`
       );
     case 'registered_no_show':
-      return (
-        `ご予約いただいた「${title}」の回にお会いできませんでした。\n\n` +
-        `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
-        `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
-        `※約57分です。カメラ・マイクは使いません。`
-      );
+      return buildRegisteredNoShowText(title, pickerUrl, watch);
     case 'submitted_no_booking_30m':
       return (
         `無料相談のご入力ありがとうございます🙌\n\n` +
@@ -245,29 +285,38 @@ async function journeyCandidates(
          WHERE datetime(r.created_at) >= datetime(COALESCE(cfg.stage_enabled_at, cfg.enabled_at))
            AND r.session_start_at + (cfg.no_show_delay_minutes * 60) <= unixepoch(?)
            AND NOT EXISTS (
-             SELECT 1 FROM webinar_viewers v
-             WHERE v.webinar_id = r.webinar_id AND v.friend_id = r.friend_id
-               AND v.session_start_at = r.session_start_at
-           )
-           AND NOT EXISTS (
              SELECT 1 FROM webinar_registrations future
              WHERE future.webinar_id = r.webinar_id AND future.friend_id = r.friend_id
                AND future.session_start_at > unixepoch(?)
            )
+           AND NOT EXISTS (
+             SELECT 1 FROM webinar_viewers v
+             WHERE v.webinar_id = r.webinar_id AND v.friend_id = r.friend_id
+               AND v.session_start_at = r.session_start_at
+               AND v.last_position_seconds >= (
+                 SELECT MIN(wc.at_seconds) FROM webinar_ctas wc
+                 WHERE wc.webinar_id = r.webinar_id AND wc.kind = 'form'
+               )
+           )
          GROUP BY r.webinar_id, r.friend_id
        )
        SELECT w.id AS webinar_id, w.account_id, m.friend_id, w.slug, w.title,
-              cfg.booking_url, datetime(m.missed_session_at, 'unixepoch') AS source_at
+              w.duration_seconds, cfg.booking_url,
+              datetime(m.missed_session_at, 'unixepoch') AS source_at,
+              (
+                SELECT v.last_position_seconds FROM webinar_viewers v
+                WHERE v.webinar_id = m.webinar_id AND v.friend_id = m.friend_id
+                  AND v.session_start_at = m.missed_session_at
+              ) AS last_position_seconds,
+              (
+                SELECT MIN(wc.at_seconds) FROM webinar_ctas wc
+                WHERE wc.webinar_id = m.webinar_id AND wc.kind = 'form'
+              ) AS form_cta_at_seconds
        FROM missed m
        JOIN webinars w ON w.id = m.webinar_id
        JOIN webinar_followup_configs cfg
          ON cfg.webinar_id = w.id AND cfg.is_active = 1
        WHERE NOT EXISTS (
-           SELECT 1 FROM webinar_viewers v
-           WHERE v.webinar_id = m.webinar_id AND v.friend_id = m.friend_id
-             AND datetime(v.joined_at) >= datetime(COALESCE(cfg.stage_enabled_at, cfg.enabled_at))
-         )
-         AND NOT EXISTS (
            SELECT 1 FROM form_submissions fs
            JOIN webinar_ctas wc ON wc.form_id = fs.form_id
            WHERE wc.webinar_id = m.webinar_id AND fs.friend_id = m.friend_id
@@ -470,8 +519,25 @@ export async function processWebinarFollowups(
       if (!delivery.liffId) throw new Error('LIFF ID not configured');
       const pickerUrl = webinarPickerUrl(delivery.liffId, candidate.slug);
       const text = buildJourneyFollowupText(
-        kind, candidate.title, pickerUrl, candidate.booking_url,
+        kind,
+        candidate.title,
+        pickerUrl,
+        candidate.booking_url,
+        kind === 'registered_no_show'
+          ? {
+              lastPositionSeconds: candidate.last_position_seconds ?? null,
+              formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
+              durationSeconds: candidate.duration_seconds ?? 0,
+            }
+          : undefined,
       );
+      if (text === null) {
+        await db.prepare(
+          `UPDATE webinar_journey_followups
+           SET status = 'skipped', last_error = 'cta_reached', updated_at = ? WHERE id = ?`,
+        ).bind(jstNow(), followup.id).run();
+        continue;
+      }
       await pushViaHarnessProxy(
         options.proxyBaseUrl,
         delivery.accessToken,

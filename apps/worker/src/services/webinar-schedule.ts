@@ -5,6 +5,12 @@ const JST_OFFSET = 9 * 3600;
 const DAY = 86400;
 const LOOKAHEAD_DAYS = 8;
 
+// 配信終了後にアーカイブを見られる期間。無期限だと先延ばしを生み、
+// 「次の回に選び直せます」と案内している追客とも食い違うため区切る。
+// 案内文の日数もこの定数から組み立てる (値を変えたときに文言だけ古く残らないように)。
+export const ARCHIVE_WINDOW_DAYS = 3;
+export const ARCHIVE_WINDOW_SECONDS = ARCHIVE_WINDOW_DAYS * DAY;
+
 export interface ScheduleRule {
   type: 'daily' | 'weekly' | 'once';
   time?: string;   // "HH:MM" (daily / weekly, JST)

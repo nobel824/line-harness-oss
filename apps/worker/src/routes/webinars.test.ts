@@ -60,7 +60,7 @@ const consultationMock = {
 };
 vi.mock('../services/webinar-consultation-booking.js', () => consultationMock);
 
-const { webinarRoutes } = await import('./webinars.js');
+const { webinarRoutes, ARCHIVE_WINDOW_SECONDS } = await import('./webinars.js');
 const { signWebinarToken } = await import('../lib/webinar-token.js');
 
 const SECRET = 'channel-secret';
@@ -277,6 +277,42 @@ describe('GET /api/liff/webinars/:slug', () => {
     expect(dbMocks.upsertWebinarViewer).toHaveBeenCalledWith(
       expect.anything(), 'w1', 'friend-1', SESSION_START,
     );
+  });
+
+  test('専用入場リンクは配信終了から3日直前なら replay できる', async () => {
+    const endedAt = SESSION_START + 7200;
+    vi.setSystemTime(new Date((endedAt + ARCHIVE_WINDOW_SECONDS - 1) * 1000));
+    dbMocks.getWebinarRegistration.mockResolvedValue({
+      id: 'reg-past', webinar_id: 'w1', friend_id: 'friend-1',
+      session_start_at: SESSION_START, notified_at: 'x', created_at: 'x',
+    });
+    const res = await req(
+      `/api/liff/webinars/test-webinar?sessionStartAt=${SESSION_START}`,
+      { headers: { Authorization: 'Bearer t' } },
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.live).toBe(true);
+    expect(body.replay).toBe(true);
+    expect(body.playlistUrl).toBeDefined();
+  });
+
+  test('専用入場リンクは配信終了から3日を過ぎると replay せずセッション選択になる', async () => {
+    const endedAt = SESSION_START + 7200;
+    vi.setSystemTime(new Date((endedAt + ARCHIVE_WINDOW_SECONDS + 1) * 1000));
+    dbMocks.getWebinarRegistration.mockResolvedValue({
+      id: 'reg-past', webinar_id: 'w1', friend_id: 'friend-1',
+      session_start_at: SESSION_START, notified_at: 'x', created_at: 'x',
+    });
+    const res = await req(
+      `/api/liff/webinars/test-webinar?sessionStartAt=${SESSION_START}`,
+      { headers: { Authorization: 'Bearer t' } },
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.live).toBe(false);
+    expect(body.replay).toBeUndefined();
+    expect(body.playlistUrl).toBeUndefined();
+    expect(body.upcoming).toEqual([]);
+    expect(dbMocks.upsertWebinarViewer).not.toHaveBeenCalled();
   });
 
   test('専用リンクの時刻を推測しても、本人の予約がなければ再生できない', async () => {

@@ -49,7 +49,9 @@ import {
 } from '@line-crm/db';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
-import { resolveSession, parseScheduleRules, upcomingSessions } from '../services/webinar-schedule.js';
+import {
+  resolveSession, parseScheduleRules, upcomingSessions, ARCHIVE_WINDOW_SECONDS,
+} from '../services/webinar-schedule.js';
 import { sendWebinarRegistrationConfirmation } from '../services/webinar-reminders.js';
 import { dispatchLineProxyLocally } from '../services/local-line-proxy.js';
 import {
@@ -69,6 +71,7 @@ const webinarRoutes = new Hono<Env>();
 const COMMENT_MAX = 500;
 const SESSION_COMMENT_LIMIT = 60;
 const TOKEN_GRACE_SECONDS = 3600;
+export { ARCHIVE_WINDOW_SECONDS } from '../services/webinar-schedule.js';
 // 開始後もこの秒数までは、その回を予約して途中参加できる。
 // ただし未予約者へ再生トークンは一切返さず、必ず予約を先に通す。
 const CURRENT_SESSION_JOIN_GRACE_SECONDS = 5 * 60;
@@ -182,13 +185,18 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
           )
         : null;
 
-    // 配信終了後でも、専用リンクを持つ予約済み本人には
-    // その回を先頭から再生する。アセットトークンは開くたびに再発行するため、
-    // 入場リンク自体に期限を持たせない。
+    // 配信終了後でも、専用リンクを持つ予約済み本人にはその回を先頭から再生する。
+    // ただし終了から ARCHIVE_WINDOW_SECONDS を過ぎたら replay せず、
+    // 下の通常分岐（セッション選択 / 待機ルーム）へ落とす。
+    const sessionEndedAt = requestedSessionStartAt !== null
+      ? requestedSessionStartAt + webinar.duration_seconds
+      : null;
     if (
       admissionReg &&
       requestedSessionStartAt !== null &&
-      now >= requestedSessionStartAt + webinar.duration_seconds
+      sessionEndedAt !== null &&
+      now >= sessionEndedAt &&
+      now < sessionEndedAt + ARCHIVE_WINDOW_SECONDS
     ) {
       await upsertWebinarViewer(
         c.env.DB, webinar.id, auth.friendId, requestedSessionStartAt,
