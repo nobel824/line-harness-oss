@@ -1,24 +1,70 @@
 # state — 特典→オートウェビナー→無料相談 自動導線
 
-最終更新: 2026-08-27 深夜 / フェーズ: **Phase 1 本番稼働中。事前申し込みフォームの実装が完了し未コミット**
+最終更新: 2026-08-27 深夜 / フェーズ: **Phase 1 本番稼働中。PR #40 がレビュー通過・マージ待ち**
 
 ## 次にやること
 
-1. **一次レビュー（fresh Sonnet）の結果を確認する。** 走行中だった。出力は
-   `<scratchpad>/review-out.txt`。観点は「submit→register の順序保証」「後方互換」「migration の安全性」の3つ
-2. レビューが通ったら**コミット → PR → squash merge**（`--repo nobel824/line-harness-oss` を明示）
-3. デプロイ後、**事前申し込みフォームを本番に作成**して `webinars.pre_registration_form_id` に紐付ける
-   （項目定義の JSON は `tasks/webinar-copy-and-config.md` §2 にある）
-4. **既存の相談フォーム `95a1355f` から `business` を削除**（同 §3。事前で全員から取れるので重複）
-5. **`intro_text` の投入**（下記コマンド。列は本番に既にあるので**いつでも実行できる**）
-6. **`auto_reply` の2バブル対応**（migration 074・同 §5）。**bootstrap.sql が競合するので 2 のマージ後に着手**
-7. UI 3件の残り: ヘッダー画像の**実体**（R2 に置いて URL を入れる）。**素材がまだ無い**
-8. E2E の残り（T-I / AC-4-3〜4-5 / AC-3-3）
+**PR #40**: https://github.com/nobel824/line-harness-oss/pull/40（`feat/webinar-pre-registration-form`・コミット4本）
+CI は PR では発火しない設計（`push` to main トリガーのみ）。**検証はローカルで済ませてある**
+（`packages/db` 168 tests / `apps/worker` 1037 tests / typecheck 3つ、いずれも PM 自身が再実行して green）。
 
-### intro_text 投入コマンド（ユーザー実行）
+### 1. PR #40 を squash merge する【ユーザー操作】
 ```bash
-KEY=$(secret get LINE_HARNESS_OWNER_API_KEY_AIKOMON) && curl -sS -X PUT "https://ai-komon.nobel824.workers.dev/api/webinars/eec8dea0-574e-411c-9417-2902b2cf980a" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d @tasks/_payloads/webinar-intro-text.json | python3 -m json.tool
+gh pr merge 40 --repo nobel824/line-harness-oss --squash --delete-branch
 ```
+マージすると `Deploy Cloudflare Worker` / `Deploy Cloudflare Admin` が走り、migration 072 / 073 が適用される。
+
+### 2. デプロイ完了を確認してから、本番設定を**この順で**入れる【ユーザー操作】
+
+**順序を守ること。** 追客本文の修正が本番に出る前にスケジュールだけ変えると、**追客が嘘の案内を送る**
+（旧本文は「毎日19時〜23時のあいだ、1時間ごとに開催しています」）。
+
+```bash
+KEY=$(secret get LINE_HARNESS_OWNER_API_KEY_AIKOMON)
+BASE=https://ai-komon.nobel824.workers.dev
+WID=eec8dea0-574e-411c-9417-2902b2cf980a
+
+# (a) 開催スケジュール: 毎日5枠 → 週5日(月水金土日) 20時
+curl -sS -X PUT "$BASE/api/webinars/$WID" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d @tasks/_payloads/webinar-schedule.json | python3 -m json.tool
+
+# (b) 特典の応答メッセージ内の開催時間の1行を差し替え（本文の他の部分は現行のまま）
+curl -sS -X PUT "$BASE/api/auto-replies/d8f05c9e-5e2c-4a1a-b8c9-2df1b6b18177" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d @tasks/_payloads/auto-reply-schedule-line.json | python3 -m json.tool
+
+# (c) セッション選択画面の申し込み文言（これはデプロイ前でも実行できる）
+curl -sS -X PUT "$BASE/api/webinars/$WID" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d @tasks/_payloads/webinar-intro-text.json | python3 -m json.tool
+
+# (d) 事前申し込みフォームを作る → 返ってきた id を控える
+curl -sS -X POST "$BASE/api/forms" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d @tasks/_payloads/pre-registration-form-create.json | python3 -m json.tool
+
+# (e) 作ったフォームをウェビナーに紐付ける（<FORM_ID> を (d) の id に置換）
+curl -sS -X PUT "$BASE/api/webinars/$WID" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d '{"preRegistrationFormId":"<FORM_ID>"}' | python3 -m json.tool
+
+# (f) 既存の相談フォームから business を削る（事前フォームと重複するため）
+curl -sS -X PUT "$BASE/api/forms/95a1355f-8f5d-4ffb-b0a0-4900c13bc6ee" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d @tasks/_payloads/consult-form-update.json | python3 -m json.tool
+```
+
+**(a)〜(f) はすべて部分更新**（送ったフィールドだけ変わる）。`keyword` や `title` は消えない。実装で確認済み。
+
+### 3. 投入後の確認
+- セッション選択画面を開いて、**枠が6件・すべて20時**になっているか
+- 回を押して**事前申し込みフォームが出る**か（4項目・すべて必須）
+- 送信して**予約が確定**し、入場リンクが LINE に届くか
+- 入場リンクのメッセージに「配信のあと3日間は、このリンクから見返せます。」が入っているか
+
+### 4. まだ実装していないもの
+- **`auto_reply` の2バブル分割**（migration 074。設計は `tasks/webinar-copy-and-config.md` §5）。
+  特典本体と案内を分ける。**課金は増えない**（応答メッセージは課金対象外・吹き出しは3つまで）
+- **ヘッダー画像の実体**（`intro_image_url` の列と UI は入った。**画像素材がまだ無い**）
+- **自分のコメントがリロードで消える**（保存はされているのに `/state` に含めていない）
+- **実在コメントの相互表示**（サクラは使わない。⑬参照）。**同時視聴者が数人になるまで有効化しない**
+- E2E の残り（T-I / AC-4-3〜4-5 / AC-3-3）
+- **月間の新規特典請求者数の実測**（通数の分母。まだ測っていない。`特典請求` タグ保持者は 2026-08-27 時点で 0人）
 
 ## 本番への書き込みは Claude Code から実行できない
 
@@ -180,6 +226,44 @@ AI顧問アカウント（`tatsuki | AI顧問` @288pnjfn / accountId `db3ca401-2
 **CTA 位置はハードコードせず `webinar_ctas` の `kind='form'` の最小 `at_seconds` を引く。**
 
 **文言の注意**: 「◯分まで見ましたね」と実際の停止位置を出さない（監視されている印象が離脱を招く）。
+
+### ⑭ レビューで見つけた欠陥（PM が自分で発見し修正・`b15ce54`）
+
+**CTA未設定のウェビナーで、完走した人に「お会いできませんでした」が飛ぶ**沈黙故障があった。
+候補SQLの閾値 `MIN(wc.at_seconds) WHERE kind='form'` は form CTA が1つも無いと **NULL** を返し、
+`last_position_seconds >= NULL` が NULL に評価されて `NOT EXISTS` が真になり、視聴済みの人が候補に残っていた。
+旧実装は「viewers に行があれば除外」だったので**挙動の後退**。`COALESCE(..., 0)` で従来挙動に戻した。
+
+**本番のウェビナーは1件だけで form CTA があるため実害は無かった**が、CTA無しのウェビナーを作った瞬間に発火する。
+
+**さらに、この修正はテストで守られていなかった**（一次レビューの指摘）。候補SQLのテストはモックで `.all()` の
+返り値を直接与えるので、**SQL 本文が壊れても green のまま通る**。`COALESCE` を SQL 文字列で縛るアサーションを足し、
+**外すと実際に落ちることを確認**してから戻した。
+
+**一次レビュー（fresh Sonnet）の結果**: アーカイブ期限の境界 / 追客の出し分け / 文言と定数の整合 / 既存挙動の非破壊 の
+4観点とも問題なし。循環 import も無し。
+
+**レビュー運用の注意**: `claude -p --model sonnet --permission-mode plan` が権限警告19行だけ出して
+本体を実行せずに終わる事象が2回あった。**`--tools Read,Glob,Grep --strict-mcp-config --setting-sources ""` を付けると通った。**
+また **diff を撮ってからさらに修正すると、レビュアーは古い diff を見ることになる**（今回まさに起きた。
+レビュアー自身が現物と diff の不一致を検知して報告してきた）。
+
+### ⑬ サクラコメントは使わない（2026-08-27・ユーザーから「盛り上がり感を出したい」と提案があったが却下）
+
+**法令側の論点なので技術論に落とさない。**
+launch 争点 §3-2:「**体験していない人の声**、AI生成レビュー、中の人の非開示推薦は **FTC 2024 規則の禁止対象**（米）。
+日本は**ステマ規制＋景表法**。ローンチ前に事例が無いなら、**偽事例で埋めない**」。
+同 §1 も FTC Consumer Review Rule（偽レビュー・偽体験談・2024-10-21 施行）を挙げる。
+日本のステマ規制は「事業者の表示であることを隠して第三者の表示に見せかける」ことを禁じ、**サクラは典型例**。
+設計正本 funnel-design も「コメント欄・疑似チャットは置かない（存在しない参加者を演出することになる）」と却下済み。
+
+**疑似ライブ（録画をライブ形式で流す）とサクラは別物**。前者は開催形式の演出、後者は**他人の発言の捏造**。線はここ。
+
+**代替の道はある**: 実在コメントを他の視聴者に見せるなら捏造ではなく、却下理由（存在しない参加者）が消える。
+**週5回20時固定にしたことで1回あたりの密度が7倍になった**ので条件は近づいた。
+**ただし今は有効化しない** —— `特典請求` タグ保持者が 0人の段階で相互表示を入れると、
+**コメントが流れない画面＝「誰もいない」が可視化されて逆効果**。1回あたり数人が同時視聴する状態になってから。
+実装は `/state` が返すコメントに当該セッションの `webinar_user_comments` を混ぜるだけで小さい。
 
 ### ⑫ 無料相談CTAの本番設定（2026-08-27 確認・設定済み）
 
