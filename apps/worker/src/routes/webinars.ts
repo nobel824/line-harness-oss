@@ -180,6 +180,7 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         live: true,
         replay: true,
         title: webinar.title,
+        introText: webinar.intro_text,
         durationSeconds: webinar.duration_seconds,
         sessionStartAt: requestedSessionStartAt,
         offsetSeconds: 0,
@@ -224,6 +225,7 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
           live: false,
           waiting: true,
           title: webinar.title,
+          introText: webinar.intro_text,
           nextSessionAt: next,
           offsetSeconds: now - next,
           comments: comments.map((cm) => ({
@@ -242,6 +244,7 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
       return c.json({
         live: false,
         title: webinar.title,
+        introText: webinar.intro_text,
         nextSessionAt: next,
         upcoming,
         registeredSessionAt: reg?.session_start_at ?? null,
@@ -268,6 +271,7 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
       return c.json({
         live: false,
         title: webinar.title,
+        introText: webinar.intro_text,
         nextSessionAt: bookable[0] ?? session.nextSessionAt,
         upcoming: bookable,
         registeredSessionAt: liveReg?.session_start_at ?? null,
@@ -293,6 +297,7 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
     return c.json({
       live: true,
       title: webinar.title,
+      introText: webinar.intro_text,
       durationSeconds: webinar.duration_seconds,
       sessionStartAt: session.sessionStartAt,
       offsetSeconds: session.offsetSeconds,
@@ -720,6 +725,7 @@ function serializeWebinar(row: Webinar) {
     id: row.id,
     accountId: row.account_id,
     title: row.title,
+    introText: row.intro_text,
     slug: row.slug,
     status: row.status,
     videoPrefix: row.video_prefix,
@@ -739,6 +745,7 @@ interface WebinarBody {
   slug?: string;
   status?: string;
   videoPrefix?: string | null;
+  introText?: string | null;
   durationSeconds?: number;
   schedule?: unknown[];
   cta?: { label?: string; url?: string; showAtSeconds?: number } | null;
@@ -794,6 +801,7 @@ function validateWebinarBody(
   if (body.videoPrefix !== undefined) {
     input.videoPrefix = body.videoPrefix?.replace(/^\/+|\/+$/g, '') || null;
   }
+  if (body.introText !== undefined) input.introText = body.introText;
   if (body.durationSeconds !== undefined) {
     input.durationSeconds = Math.floor(body.durationSeconds);
   }
