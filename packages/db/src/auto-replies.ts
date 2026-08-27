@@ -9,6 +9,8 @@ export interface AutoReply {
   match_type: 'exact' | 'contains';
   response_type: string;
   response_content: string;
+  response_type_2?: string | null;
+  response_content_2?: string | null;
   template_id: string | null;
   line_account_id: string | null;
   is_active: number;
@@ -49,6 +51,8 @@ export interface CreateAutoReplyInput {
   matchType?: 'exact' | 'contains';
   responseType?: string;
   responseContent: string;
+  responseType2?: string | null;
+  responseContent2?: string | null;
   templateId?: string | null;
   lineAccountId?: string | null;
 }
@@ -64,8 +68,9 @@ export async function createAutoReply(
     .prepare(
       `INSERT INTO auto_replies
          (id, keyword, match_type, response_type, response_content,
+          response_type_2, response_content_2,
           template_id, line_account_id, is_active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     )
     .bind(
       id,
@@ -73,6 +78,8 @@ export async function createAutoReply(
       input.matchType ?? 'exact',
       input.responseType ?? 'text',
       input.responseContent,
+      input.responseType2 ?? null,
+      input.responseContent2 ?? null,
       input.templateId ?? null,
       input.lineAccountId ?? null,
       now,
@@ -87,6 +94,8 @@ export interface UpdateAutoReplyInput {
   matchType?: 'exact' | 'contains';
   responseType?: string;
   responseContent?: string;
+  responseType2?: string | null;
+  responseContent2?: string | null;
   templateId?: string | null;
   lineAccountId?: string | null;
   isActive?: boolean;
@@ -109,6 +118,8 @@ export async function updateAutoReply(
            match_type = ?,
            response_type = ?,
            response_content = ?,
+           response_type_2 = ?,
+           response_content_2 = ?,
            template_id = ?,
            line_account_id = ?,
            is_active = ?,
@@ -120,6 +131,8 @@ export async function updateAutoReply(
       input.matchType ?? existing.match_type,
       input.responseType ?? existing.response_type,
       input.responseContent ?? existing.response_content,
+      'responseType2' in input ? (input.responseType2 ?? null) : (existing.response_type_2 ?? null),
+      'responseContent2' in input ? (input.responseContent2 ?? null) : (existing.response_content_2 ?? null),
       'templateId' in input ? (input.templateId ?? null) : existing.template_id,
       'lineAccountId' in input ? (input.lineAccountId ?? null) : existing.line_account_id,
       'isActive' in input ? (input.isActive ? 1 : 0) : existing.is_active,

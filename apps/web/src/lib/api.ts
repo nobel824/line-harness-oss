@@ -941,6 +941,8 @@ export const api = {
         matchType: 'exact' | 'contains';
         responseType: string;
         responseContent: string;
+        responseType2?: string | null;
+        responseContent2?: string | null;
         templateId: string | null;
         lineAccountId: string | null;
         isActive: boolean;
@@ -960,6 +962,8 @@ export const api = {
         matchType: 'exact' | 'contains';
         responseType: string;
         responseContent: string;
+        responseType2?: string | null;
+        responseContent2?: string | null;
         templateId: string | null;
         lineAccountId: string | null;
         isActive: boolean;
@@ -970,6 +974,8 @@ export const api = {
       matchType?: 'exact' | 'contains';
       responseType?: string;
       responseContent?: string;
+      responseType2?: string | null;
+      responseContent2?: string | null;
       templateId?: string | null;
       lineAccountId?: string | null;
     }) =>
@@ -982,6 +988,8 @@ export const api = {
       matchType?: 'exact' | 'contains';
       responseType?: string;
       responseContent?: string;
+      responseType2?: string | null;
+      responseContent2?: string | null;
       templateId?: string | null;
       lineAccountId?: string | null;
       isActive?: boolean;

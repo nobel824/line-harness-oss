@@ -10,6 +10,8 @@ export interface AutoReplyDraft {
   matchType: 'exact' | 'contains'
   responseType: string
   responseContent: string
+  responseType2?: string | null
+  responseContent2?: string | null
   templateId: string | null
   lineAccountId: string | null
   isActive: boolean
@@ -38,6 +40,8 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
   const [mode, setMode] = useState<ResponseMode>(detectMode(draft))
   const [templateId, setTemplateId] = useState<string | null>(draft.templateId)
   const [responseContent, setResponseContent] = useState(draft.responseContent)
+  const [responseType2, setResponseType2] = useState(draft.responseType2 ?? '')
+  const [responseContent2, setResponseContent2] = useState(draft.responseContent2 ?? '')
   const [isActive, setIsActive] = useState(draft.isActive)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -60,6 +64,8 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
         matchType: 'exact' | 'contains';
         responseType: string;
         responseContent: string;
+        responseType2: string | null;
+        responseContent2: string | null;
         templateId: string | null;
         lineAccountId: string | null;
         isActive: boolean;
@@ -75,6 +81,12 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
         // template mode でも response_content / response_type を残す。template が
         // 削除された (ON DELETE SET NULL) ときの inline fallback として機能する。
         responseContent: mode === 'silent' ? '' : responseContent,
+        responseType2: mode === 'silent' || !responseContent2.trim()
+          ? null
+          : (responseType2 || null),
+        responseContent2: mode === 'silent' || !responseContent2.trim()
+          ? null
+          : responseContent2,
         templateId: mode === 'template' ? templateId : null,
         lineAccountId: draft.lineAccountId,
         isActive,
@@ -233,6 +245,31 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               }}
               label="返信画像"
             />
+          )}
+          {mode !== 'silent' && (
+            <div className="pt-2 border-t border-gray-100 space-y-2">
+              <label className="block text-xs text-gray-600">2通目（空なら送りません）</label>
+              <p className="text-[11px] text-gray-500">
+                同じ応答の2つ目の吹き出しです。空欄のままなら1通目だけ送られます。
+              </p>
+              <select
+                value={responseType2}
+                onChange={(e) => setResponseType2(e.target.value)}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="">1通目と同じ型</option>
+                <option value="text">テキスト</option>
+                <option value="flex">Flex JSON</option>
+                <option value="image">画像 JSON</option>
+              </select>
+              <textarea
+                rows={4}
+                value={responseContent2}
+                onChange={(e) => setResponseContent2(e.target.value)}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
+                placeholder="空なら2通目は送りません"
+              />
+            </div>
           )}
           <label className="inline-flex items-center gap-2 cursor-pointer">
             <input

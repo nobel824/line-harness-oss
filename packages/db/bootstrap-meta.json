@@ -78,7 +78,8 @@
     "070_google_calendar_busy_calendars.sql",
     "071_webinar_intro_text.sql",
     "072_webinar_intro_image_url.sql",
-    "073_webinar_pre_registration_form.sql"
+    "073_webinar_pre_registration_form.sql",
+    "074_auto_reply_second_message.sql"
   ],
-  "migrationCount": 79
+  "migrationCount": 80
 }

@@ -117,7 +117,7 @@ CREATE TABLE auto_replies (
   line_account_id  TEXT DEFAULT NULL,
   is_active        INTEGER NOT NULL DEFAULT 1,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-);
+, response_type_2 TEXT, response_content_2 TEXT);
 
 CREATE TABLE automation_logs (
   id             TEXT PRIMARY KEY,

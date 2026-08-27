@@ -595,6 +595,24 @@ export async function getWebinarUserComments(
   return results ?? [];
 }
 
+export async function getMyWebinarSessionComments(
+  db: D1Database,
+  webinarId: string,
+  friendId: string,
+  sessionStartAt: number,
+): Promise<Array<Pick<WebinarUserComment, 'id' | 'at_seconds' | 'body'>>> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, at_seconds, body
+         FROM webinar_user_comments
+        WHERE webinar_id = ? AND friend_id = ? AND session_start_at = ?
+        ORDER BY at_seconds ASC, created_at ASC, id ASC`,
+    )
+    .bind(webinarId, friendId, sessionStartAt)
+    .all<{ id: string; at_seconds: number; body: string }>();
+  return results ?? [];
+}
+
 export async function getWebinarSessionStats(
   db: D1Database,
   webinarId: string,

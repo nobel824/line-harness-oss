@@ -112,6 +112,35 @@ interface WebinarSakuraComment {
   body: string;
 }
 
+interface MyComment {
+  atSeconds: number;
+  body: string;
+}
+
+interface TimelineComment extends WebinarSakuraComment {
+  mine?: boolean;
+}
+
+function mergeChatTimeline(
+  sakura: WebinarSakuraComment[],
+  mine: MyComment[] | undefined,
+): TimelineComment[] {
+  const items: TimelineComment[] = sakura.map((cm) => ({ ...cm }));
+  for (const cm of mine ?? []) {
+    items.push({
+      atSeconds: cm.atSeconds,
+      authorName: 'あなた',
+      body: cm.body,
+      mine: true,
+    });
+  }
+  items.sort((a, b) => {
+    if (a.atSeconds !== b.atSeconds) return a.atSeconds - b.atSeconds;
+    return Number(Boolean(a.mine)) - Number(Boolean(b.mine));
+  });
+  return items;
+}
+
 type WebinarState =
   | {
       live: true;
@@ -126,6 +155,7 @@ type WebinarState =
       playlistUrl: string;
       cta: WebinarCta | null;
       comments: WebinarSakuraComment[];
+      myComments?: MyComment[];
       ctas: WebinarCtaCard[];
       // 参加ゲート用: 今後の回と自分の予約
       upcoming?: number[];
@@ -143,6 +173,7 @@ type WebinarState =
       nextSessionAt: number;
       offsetSeconds: number;
       comments: WebinarSakuraComment[];
+      myComments?: MyComment[];
     }
   | {
       live: false;
@@ -446,18 +477,19 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
       ) {
         video.currentTime = pos;
       }
-      // サクラコメント流し込み
-      const comments = src.comments;
+      // サクラコメント + 自分の投稿（リロード復元）を atSeconds 順で流し込み
+      const comments = mergeChatTimeline(src.comments, src.myComments);
       const items: ChatItem[] = [];
       while (
         commentIdxRef.current < comments.length &&
         comments[commentIdxRef.current].atSeconds <= pos
       ) {
-        const cm: WebinarSakuraComment = comments[commentIdxRef.current];
+        const cm = comments[commentIdxRef.current];
         items.push({
-          key: `s-${commentIdxRef.current}`,
+          key: `${cm.mine ? 'm' : 's'}-${commentIdxRef.current}`,
           authorName: cm.authorName,
           body: cm.body,
+          mine: cm.mine,
         });
         commentIdxRef.current += 1;
       }
@@ -490,14 +522,19 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
     const src = state;
     const timer = setInterval(() => {
       const pos = baseOffsetRef.current + (Date.now() - waitT0Ref.current) / 1000;
-      const comments = src.comments;
+      const comments = mergeChatTimeline(src.comments, src.myComments);
       const items: ChatItem[] = [];
       while (
         commentIdxRef.current < comments.length &&
         comments[commentIdxRef.current].atSeconds <= pos
       ) {
         const cm = comments[commentIdxRef.current];
-        items.push({ key: `w-${commentIdxRef.current}`, authorName: cm.authorName, body: cm.body });
+        items.push({
+          key: `${cm.mine ? 'm' : 'w'}-${commentIdxRef.current}`,
+          authorName: cm.authorName,
+          body: cm.body,
+          mine: cm.mine,
+        });
         commentIdxRef.current += 1;
       }
       if (items.length > 0) setChat((prev) => [...prev.slice(-200), ...items]);
