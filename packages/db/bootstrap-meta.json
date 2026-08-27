@@ -76,7 +76,9 @@
     "068_media_inquiries.sql",
     "069_rich_menu_selected.sql",
     "070_google_calendar_busy_calendars.sql",
-    "071_webinar_intro_text.sql"
+    "071_webinar_intro_text.sql",
+    "072_webinar_intro_image_url.sql",
+    "073_webinar_pre_registration_form.sql"
   ],
-  "migrationCount": 77
+  "migrationCount": 79
 }

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { webinarApi, type Webinar, type WebinarInput, type WebinarScheduleRule } from '@/lib/api'
+import { fetchApi, webinarApi, type Webinar, type WebinarInput, type WebinarScheduleRule } from '@/lib/api'
 
 const DAYS = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -37,9 +37,12 @@ export interface WebinarFormProps {
 export default function WebinarForm({ initial }: WebinarFormProps) {
   const router = useRouter()
   const [title, setTitle] = useState(initial?.title ?? '')
-  const [introText, setIntroText] = useState(
-    (initial as { introText?: string | null } | undefined)?.introText ?? '',
+  const [introImageUrl, setIntroImageUrl] = useState(initial?.introImageUrl ?? '')
+  const [introText, setIntroText] = useState(initial?.introText ?? '')
+  const [preRegistrationFormId, setPreRegistrationFormId] = useState(
+    initial?.preRegistrationFormId ?? '',
   )
+  const [forms, setForms] = useState<Array<{ id: string; name: string }>>([])
   const [slug, setSlug] = useState(initial?.slug ?? '')
   const [status, setStatus] = useState<Webinar['status']>(initial?.status ?? 'draft')
   const [videoPrefix, setVideoPrefix] = useState(initial?.videoPrefix ?? '')
@@ -59,6 +62,12 @@ export default function WebinarForm({ initial }: WebinarFormProps) {
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void fetchApi<{ success: boolean; data: Array<{ id: string; name: string }> }>('/api/forms')
+      .then((res) => setForms(res.data.map((f) => ({ id: f.id, name: f.name }))))
+      .catch(() => undefined)
+  }, [])
 
   const updateRule = (i: number, patch: Partial<WebinarScheduleRule>) =>
     setRules((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)))
@@ -85,9 +94,11 @@ export default function WebinarForm({ initial }: WebinarFormProps) {
   const save = async () => {
     setSaving(true)
     setError(null)
-    const input: WebinarInput & { introText: string | null } = {
+    const input: WebinarInput = {
       title,
+      introImageUrl: introImageUrl.trim() || null,
       introText: introText.trim() || null,
+      preRegistrationFormId: preRegistrationFormId.trim() || null,
       slug,
       status,
       videoPrefix: videoPrefix.trim() || null,
@@ -126,6 +137,15 @@ export default function WebinarForm({ initial }: WebinarFormProps) {
           <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputClass} />
         </div>
         <div>
+          <label className={labelClass}>ヘッダー画像 URL（セッション選択画面のタイトル上に表示）</label>
+          <input
+            value={introImageUrl}
+            onChange={(e) => setIntroImageUrl(e.target.value)}
+            placeholder="https://"
+            className={inputClass}
+          />
+        </div>
+        <div>
           <label className={labelClass}>申し込み文言（セッション選択画面に表示）</label>
           <textarea
             value={introText}
@@ -134,6 +154,19 @@ export default function WebinarForm({ initial }: WebinarFormProps) {
             placeholder="この動画で何が分かるのか、なぜ今観るのかを書きます（改行はそのまま反映されます）"
             className={inputClass}
           />
+        </div>
+        <div>
+          <label className={labelClass}>事前申し込みフォーム</label>
+          <select
+            value={preRegistrationFormId}
+            onChange={(e) => setPreRegistrationFormId(e.target.value)}
+            className={inputClass}
+          >
+            <option value="">未設定（確認ダイアログ）</option>
+            {forms.map((f) => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
         </div>
         <div>
           <label className={labelClass}>状態</label>

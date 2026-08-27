@@ -1,0 +1,11 @@
+{
+  "category_label": "個別相談",
+  "base_price": 0,
+  "sort_order": 0,
+  "buffer_after_minutes": 0,
+  "auto_tag_id": null,
+  "name": "無料個別相談（45分）",
+  "description": "AI活用の進め方を45分で整理します。オンライン（Google Meet）",
+  "duration_minutes": 45,
+  "is_active": true
+}

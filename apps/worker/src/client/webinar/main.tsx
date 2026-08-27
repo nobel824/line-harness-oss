@@ -11,6 +11,8 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { buildMeetingDateOptions } from './date-options.js';
+import { FormFieldControl, type FormField } from './form-fields.js';
+import { sessionPickAction, submitFormThenRegister } from './registration-flow.js';
 import './styles.css';
 
 // LIFF SDK は index.html の script タグでグローバル注入される
@@ -57,22 +59,20 @@ interface WebinarCtaCard {
   url: string | null;
 }
 
-interface FormField {
-  name: string;
-  label: string;
-  type: 'text' | 'email' | 'tel' | 'number' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'date';
-  required?: boolean;
-  options?: string[];
-  placeholder?: string;
-}
-
 interface FormDef {
   id: string;
   name: string;
   description: string | null;
   fields: FormField[];
-  isActive: boolean;
+  isActive?: boolean;
   onSubmitMessageContent?: string | null;
+}
+
+interface PreRegistrationFormDef {
+  id: string;
+  name: string;
+  description: string | null;
+  fields: FormField[];
 }
 
 interface ConsultationSlot {
@@ -118,6 +118,8 @@ type WebinarState =
       replay?: boolean;
       title: string;
       introText?: string | null;
+      introImageUrl?: string | null;
+      preRegistrationForm?: PreRegistrationFormDef | null;
       durationSeconds: number;
       sessionStartAt: number;
       offsetSeconds: number;
@@ -136,6 +138,8 @@ type WebinarState =
       waiting: true;
       title: string;
       introText?: string | null;
+      introImageUrl?: string | null;
+      preRegistrationForm?: PreRegistrationFormDef | null;
       nextSessionAt: number;
       offsetSeconds: number;
       comments: WebinarSakuraComment[];
@@ -145,6 +149,8 @@ type WebinarState =
       waiting?: undefined;
       title: string;
       introText?: string | null;
+      introImageUrl?: string | null;
+      preRegistrationForm?: PreRegistrationFormDef | null;
       nextSessionAt: number | null;
       // セッション選択メニュー: 今後の開催回 (epoch 秒) と自分の予約
       upcoming?: number[];
@@ -643,10 +649,15 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
   };
 
   const [registering, setRegistering] = useState(false);
+  const [sessionSheet, setSessionSheet] = useState<
+    | null
+    | { kind: 'form'; sessionStartAt: number }
+    | { kind: 'confirm'; sessionStartAt: number }
+  >(null);
   // 24時間分48枠を最初から見せず、直近3時間（6枠）から段階的に開く。
   const [visibleSessionCount, setVisibleSessionCount] = useState(6);
   const registerSession = async (sessionStartAt: number) => {
-    if (registering) return;
+    if (registering) throw new Error('already registering');
     setRegistering(true);
     try {
       await apiPost(`/api/liff/webinars/${encodeURIComponent(slug)}/register`, { sessionStartAt }, ctx);
@@ -655,9 +666,25 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
       await load();
     } catch (err) {
       console.warn('register failed:', err);
+      throw err;
     } finally {
       setRegistering(false);
     }
+  };
+
+  const pickSession = (sessionStartAt: number) => {
+    if (!state) return;
+    const registered = 'registeredSessionAt' in state ? (state.registeredSessionAt ?? null) : null;
+    const action = sessionPickAction(
+      sessionStartAt,
+      registered,
+      Boolean(state.preRegistrationForm),
+    );
+    if (action.type === 'noop') return;
+    setSessionSheet({
+      kind: action.type === 'open-form' ? 'form' : 'confirm',
+      sessionStartAt: action.sessionStartAt,
+    });
   };
 
   if (error) {
@@ -692,23 +719,29 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
             ))}
           </div>
 
-          <div className="flex gap-2 border-t border-gray-700 p-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void sendComment();
-              }}
-              placeholder="コメントを入力..."
-              maxLength={500}
-              className="flex-1 rounded-full bg-gray-800 px-4 py-2 text-base text-white placeholder-gray-500"
-            />
-            <button
-              onClick={() => void sendComment()}
-              className="rounded-full bg-[#06C755] px-4 py-2 text-sm font-bold active:opacity-80"
-            >
-              送信
-            </button>
+          <div className="border-t border-gray-700">
+            <div className="flex gap-2 p-2">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void sendComment();
+                }}
+                placeholder="コメントを入力..."
+                maxLength={500}
+                className="flex-1 rounded-full bg-gray-800 px-4 py-2 text-base text-white placeholder-gray-500"
+              />
+              <button
+                onClick={() => void sendComment()}
+                className="rounded-full bg-[#06C755] px-4 py-2 text-sm font-bold active:opacity-80"
+              >
+                送信
+              </button>
+            </div>
+            {/* 一方向であることを明示する。コメントは管理画面で読めるが、この場では返信しない。 */}
+            <p className="px-3 pb-2 text-[11px] leading-relaxed text-gray-500">
+              コメントは主催者が読みます。この場での返信はありません（ご質問はLINEへ）
+            </p>
           </div>
         </div>
       </div>
@@ -721,8 +754,19 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
     const visibleUpcoming = upcoming.slice(0, visibleSessionCount);
     const registered = state.registeredSessionAt ?? null;
     return (
+      <>
       <div className="flex min-h-dvh flex-col items-center justify-center bg-gray-900 p-6 text-white">
         <p className="mb-2 text-sm text-gray-400">ライブ配信</p>
+        {state.introImageUrl ? (
+          <img
+            src={state.introImageUrl}
+            alt=""
+            className="mb-3 w-full max-w-sm rounded-2xl"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+        ) : null}
         <h1 className="mb-1 text-center text-xl font-bold">{state.title}</h1>
         {state.introText ? (
           <p className="mt-3 w-full max-w-sm whitespace-pre-line text-sm leading-relaxed text-gray-300">
@@ -734,9 +778,11 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
             <p className="text-sm text-[#06C755]">✅ 予約済み</p>
             <p className="mt-2 text-lg font-bold">{formatJp(registered)} の回</p>
             <p className="mt-3 text-xs leading-relaxed text-gray-400">
-              開始前にLINEで視聴リンクをお送りします。
+              開始5分前にLINEで視聴リンクをお送りします。
               <br />
-              時間になったらこのページも自動で配信に切り替わります
+              このページは閉じて大丈夫です。
+              <br />
+              （開いたままにしておくと、時間になって自動で配信に切り替わります）
             </p>
             <p className="mt-4 text-xs text-gray-500">別の回に変更する場合はもう一度選んでください</p>
           </div>
@@ -747,8 +793,9 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
           {visibleUpcoming.map((t) => (
             <button
               key={t}
+              type="button"
               disabled={registering}
-              onClick={() => void registerSession(t)}
+              onClick={() => pickSession(t)}
               className={`rounded-full py-3 text-center font-bold active:opacity-80 disabled:opacity-50 ${
                 registered === t
                   ? 'bg-[#06C755] text-white'
@@ -772,6 +819,27 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
           )}
         </div>
       </div>
+      {sessionSheet?.kind === 'form' && state.preRegistrationForm ? (
+        <PreRegistrationSheet
+          form={state.preRegistrationForm}
+          sessionStartAt={sessionSheet.sessionStartAt}
+          registered={registered}
+          ctx={ctx}
+          slug={slug}
+          onClose={() => setSessionSheet(null)}
+          register={registerSession}
+        />
+      ) : null}
+      {sessionSheet?.kind === 'confirm' ? (
+        <ConfirmRegistrationSheet
+          sessionStartAt={sessionSheet.sessionStartAt}
+          registered={registered}
+          submitting={registering}
+          onClose={() => setSessionSheet(null)}
+          onConfirm={() => registerSession(sessionSheet.sessionStartAt).then(() => setSessionSheet(null))}
+        />
+      ) : null}
+      </>
     );
   }
 
@@ -801,6 +869,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
     const visibleUpcoming = upcoming.slice(0, visibleSessionCount);
     const registered = state.registeredSessionAt ?? null;
     return (
+      <>
       <div className="flex min-h-dvh flex-col items-center justify-center bg-gray-900 p-6 text-white">
         <span className="rounded bg-red-600 px-2 py-0.5 text-xs font-bold">● LIVE</span>
         <h1 className="mt-3 text-center text-xl font-bold">{state.title}</h1>
@@ -823,8 +892,9 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
               {visibleUpcoming.map((t) => (
                 <button
                   key={t}
+                  type="button"
                   disabled={registering}
-                  onClick={() => void registerSession(t)}
+                  onClick={() => pickSession(t)}
                   className={`rounded-full py-3 text-center font-bold active:opacity-80 disabled:opacity-50 ${
                     registered === t ? 'bg-[#06C755] text-white' : 'bg-gray-800 text-gray-100'
                   }`}
@@ -843,13 +913,36 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
               )}
             </div>
             {registered !== null && (
-              <p className="mt-3 text-xs text-gray-500">
-                開始5分前にLINEでお知らせします。このページは閉じてOKです
+              <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                開始5分前にLINEで視聴リンクをお送りします。
+                <br />
+                このページは閉じて大丈夫です。
               </p>
             )}
           </>
         )}
       </div>
+      {sessionSheet?.kind === 'form' && state.preRegistrationForm ? (
+        <PreRegistrationSheet
+          form={state.preRegistrationForm}
+          sessionStartAt={sessionSheet.sessionStartAt}
+          registered={registered}
+          ctx={ctx}
+          slug={slug}
+          onClose={() => setSessionSheet(null)}
+          register={registerSession}
+        />
+      ) : null}
+      {sessionSheet?.kind === 'confirm' ? (
+        <ConfirmRegistrationSheet
+          sessionStartAt={sessionSheet.sessionStartAt}
+          registered={registered}
+          submitting={registering}
+          onClose={() => setSessionSheet(null)}
+          onConfirm={() => registerSession(sessionSheet.sessionStartAt).then(() => setSessionSheet(null))}
+        />
+      ) : null}
+      </>
     );
   }
 
@@ -967,23 +1060,29 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
       ) : null}
 
       {!ended && !state.replay && (
-        <div className="flex gap-2 border-t border-gray-700 p-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void sendComment();
-            }}
-            placeholder="コメントを入力..."
-            maxLength={500}
-            className="flex-1 rounded-full bg-gray-800 px-4 py-2 text-base text-white placeholder-gray-500"
-          />
-          <button
-            onClick={() => void sendComment()}
-            className="rounded-full bg-[#06C755] px-4 py-2 text-sm font-bold active:opacity-80"
-          >
-            送信
-          </button>
+        <div className="border-t border-gray-700">
+          <div className="flex gap-2 p-2">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void sendComment();
+              }}
+              placeholder="コメントを入力..."
+              maxLength={500}
+              className="flex-1 rounded-full bg-gray-800 px-4 py-2 text-base text-white placeholder-gray-500"
+            />
+            <button
+              onClick={() => void sendComment()}
+              className="rounded-full bg-[#06C755] px-4 py-2 text-sm font-bold active:opacity-80"
+            >
+              送信
+            </button>
+          </div>
+          {/* 一方向であることを明示する。コメントは管理画面で読めるが、この場では返信しない。 */}
+          <p className="px-3 pb-2 text-[11px] leading-relaxed text-gray-500">
+            コメントは主催者が読みます。この場での返信はありません（ご質問はLINEへ）
+          </p>
         </div>
       )}
 
@@ -1404,78 +1503,13 @@ function FormSheet({
                     {f.label}
                     {f.required && <span className="ml-1 text-red-500">*</span>}
                   </span>
-                  {f.type === 'textarea' ? (
-                    <textarea
-                      rows={3}
-                      placeholder={f.placeholder}
-                      value={(values[f.name] as string) ?? ''}
-                      onChange={(e) => setValue(f.name, e.target.value)}
-                      onBlur={(e) => markFieldComplete(f.name, e.target.value)}
-                      className={`mt-1 ${inputCls}`}
-                    />
-                  ) : f.type === 'select' ? (
-                    <select
-                      value={(values[f.name] as string) ?? ''}
-                      onChange={(e) => {
-                        setValue(f.name, e.target.value);
-                        markFieldComplete(f.name, e.target.value);
-                      }}
-                      className={`mt-1 ${inputCls}`}
-                    >
-                      <option value="">選択してください</option>
-                      {(f.options ?? []).map((o) => (
-                        <option key={o} value={o}>{o}</option>
-                      ))}
-                    </select>
-                  ) : f.type === 'radio' ? (
-                    <div className="mt-1 space-y-1.5">
-                      {(f.options ?? []).map((o) => (
-                        <label key={o} className="flex items-center gap-2">
-                          <input
-                            type="radio"
-                            name={f.name}
-                            checked={values[f.name] === o}
-                            onChange={() => {
-                              setValue(f.name, o);
-                              markFieldComplete(f.name, o);
-                            }}
-                          />
-                          <span>{o}</span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : f.type === 'checkbox' ? (
-                    <div className="mt-1 space-y-1.5">
-                      {(f.options ?? []).map((o) => {
-                        const cur = (values[f.name] as string[]) ?? [];
-                        return (
-                          <label key={o} className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={cur.includes(o)}
-                              onChange={(e) => {
-                                const next = e.target.checked
-                                  ? [...cur, o]
-                                  : cur.filter((x) => x !== o);
-                                setValue(f.name, next);
-                                markFieldComplete(f.name, next);
-                              }}
-                            />
-                            <span>{o}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <input
-                      type={f.type}
-                      placeholder={f.placeholder}
-                      value={(values[f.name] as string) ?? ''}
-                      onChange={(e) => setValue(f.name, e.target.value)}
-                      onBlur={(e) => markFieldComplete(f.name, e.target.value)}
-                      className={`mt-1 ${inputCls}`}
-                    />
-                  )}
+                  <FormFieldControl
+                    field={f}
+                    value={values[f.name]}
+                    onChange={setValue}
+                    onComplete={markFieldComplete}
+                    inputCls={inputCls}
+                  />
                 </label>
                 );
                 })}
@@ -1505,6 +1539,208 @@ function FormSheet({
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function PreRegistrationSheet({
+  form,
+  sessionStartAt,
+  registered,
+  ctx,
+  slug,
+  onClose,
+  register,
+}: {
+  form: PreRegistrationFormDef;
+  sessionStartAt: number;
+  registered: number | null;
+  ctx: WebinarContext;
+  slug: string;
+  onClose: () => void;
+  register: (sessionStartAt: number) => Promise<void>;
+}) {
+  const [values, setValues] = useState<Record<string, string | string[]>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const changing = registered !== null && registered !== sessionStartAt;
+  const inputCls =
+    'w-full min-w-0 rounded border border-gray-300 bg-white px-3 py-2 text-base text-gray-900';
+
+  const hasValue = (value: string | string[] | undefined) =>
+    Array.isArray(value) ? value.length > 0 : typeof value === 'string' && value.trim() !== '';
+
+  const setValue = (name: string, v: string | string[]) => {
+    setError(null);
+    setValues((prev) => ({ ...prev, [name]: v }));
+  };
+
+  const submit = async () => {
+    if (submitting) return;
+    for (const f of form.fields) {
+      const v = values[f.name];
+      if (f.required && !hasValue(v)) {
+        setError(`「${f.label}」は必須項目です`);
+        return;
+      }
+    }
+    setSubmitting(true);
+    setError(null);
+    const result = await submitFormThenRegister({
+      submit: () => fetch(`/api/forms/${encodeURIComponent(form.id)}/submit`, {
+        method: 'POST',
+        headers: buildAuthHeaders(ctx, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ data: values }),
+      }),
+      register: () => register(sessionStartAt),
+    });
+    if (!result.ok) {
+      setError(result.error);
+      setSubmitting(false);
+      return;
+    }
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+      <button
+        type="button"
+        aria-label="閉じる"
+        className="flex-1 bg-black/40"
+        onClick={onClose}
+      />
+      <div className="mx-auto flex w-full max-w-md max-h-[75vh] flex-col overflow-hidden rounded-t-2xl bg-white p-5 text-gray-900">
+        <div className="mx-auto mb-3 h-1 w-10 rounded bg-gray-300" />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+            <h2 className="text-lg font-bold">
+              {changing
+                ? `${formatJp(sessionStartAt)} の回に変更する`
+                : `${formatJp(sessionStartAt)} の回に申し込む`}
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              {changing && registered !== null
+                ? `いまの予約（${formatJp(registered)} の回）は取り消されます。`
+                : 'あとから別の回に変更できます。'}
+            </p>
+            <p className="mt-1 text-sm text-gray-500">すべての項目にご回答ください。</p>
+            <div className="mt-4 space-y-4 pb-2">
+              {form.fields.map((f) => (
+                <label key={f.name} className="block text-sm">
+                  <span className="font-medium">
+                    {f.label}
+                    {f.required && <span className="ml-1 text-red-500">*</span>}
+                  </span>
+                  <FormFieldControl
+                    field={f}
+                    value={values[f.name]}
+                    onChange={setValue}
+                    onComplete={() => undefined}
+                    inputCls={inputCls}
+                  />
+                </label>
+              ))}
+            </div>
+            {error && <p className="mt-2 text-sm font-bold text-red-600">{error}</p>}
+          </div>
+          <div className="-mx-5 -mb-5 shrink-0 border-t border-gray-200 bg-white px-5 pb-4 pt-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={submitting}
+              className="w-full rounded-full bg-[#06C755] py-3 text-base font-bold text-white shadow disabled:opacity-50 active:opacity-80"
+            >
+              {submitting
+                ? '送信中...'
+                : changing
+                  ? 'この回に変更する'
+                  : 'この回で申し込む'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="mt-2 w-full rounded-full border border-gray-300 py-2.5 font-bold text-gray-600 active:opacity-80 disabled:opacity-50"
+            >
+              戻る
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmRegistrationSheet({
+  sessionStartAt,
+  registered,
+  submitting,
+  onClose,
+  onConfirm,
+}: {
+  sessionStartAt: number;
+  registered: number | null;
+  submitting: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const changing = registered !== null && registered !== sessionStartAt;
+
+  const confirm = async () => {
+    if (submitting) return;
+    setError(null);
+    try {
+      await onConfirm();
+    } catch {
+      setError('送信に失敗しました。もう一度お試しください。');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+      <button
+        type="button"
+        aria-label="閉じる"
+        className="flex-1 bg-black/40"
+        onClick={onClose}
+      />
+      <div className="mx-auto flex w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white p-5 text-gray-900">
+        <div className="mx-auto mb-3 h-1 w-10 rounded bg-gray-300" />
+        <h2 className="text-lg font-bold">
+          {changing
+            ? `${formatJp(sessionStartAt)} の回に変更します`
+            : `${formatJp(sessionStartAt)} の回を予約します`}
+        </h2>
+        <p className="mt-2 text-sm text-gray-600">
+          {changing && registered !== null
+            ? `いまの予約（${formatJp(registered)} の回）は取り消されます。`
+            : '開始5分前にLINEで視聴リンクをお送りします。'}
+        </p>
+        <p className="mt-1 text-sm text-gray-600">あとから別の回に変更できます。</p>
+        {error && <p className="mt-3 text-sm font-bold text-red-600">{error}</p>}
+        <button
+          type="button"
+          onClick={() => void confirm()}
+          disabled={submitting}
+          className="mt-5 w-full rounded-full bg-[#06C755] py-3 text-base font-bold text-white shadow disabled:opacity-50 active:opacity-80"
+        >
+          {submitting
+            ? '送信中...'
+            : changing
+              ? 'この回に変更する'
+              : 'この回で予約する'}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={submitting}
+          className="mt-2 w-full rounded-full border border-gray-300 py-2.5 font-bold text-gray-600 active:opacity-80 disabled:opacity-50"
+        >
+          戻る
+        </button>
       </div>
     </div>
   );

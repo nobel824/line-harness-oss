@@ -60,7 +60,7 @@ const consultationMock = {
 };
 vi.mock('../services/webinar-consultation-booking.js', () => consultationMock);
 
-const { webinarRoutes } = await import('./webinars.js');
+const { webinarRoutes, ARCHIVE_WINDOW_SECONDS } = await import('./webinars.js');
 const { signWebinarToken } = await import('../lib/webinar-token.js');
 
 const SECRET = 'channel-secret';
@@ -279,6 +279,42 @@ describe('GET /api/liff/webinars/:slug', () => {
     );
   });
 
+  test('専用入場リンクは配信終了から3日直前なら replay できる', async () => {
+    const endedAt = SESSION_START + 7200;
+    vi.setSystemTime(new Date((endedAt + ARCHIVE_WINDOW_SECONDS - 1) * 1000));
+    dbMocks.getWebinarRegistration.mockResolvedValue({
+      id: 'reg-past', webinar_id: 'w1', friend_id: 'friend-1',
+      session_start_at: SESSION_START, notified_at: 'x', created_at: 'x',
+    });
+    const res = await req(
+      `/api/liff/webinars/test-webinar?sessionStartAt=${SESSION_START}`,
+      { headers: { Authorization: 'Bearer t' } },
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.live).toBe(true);
+    expect(body.replay).toBe(true);
+    expect(body.playlistUrl).toBeDefined();
+  });
+
+  test('専用入場リンクは配信終了から3日を過ぎると replay せずセッション選択になる', async () => {
+    const endedAt = SESSION_START + 7200;
+    vi.setSystemTime(new Date((endedAt + ARCHIVE_WINDOW_SECONDS + 1) * 1000));
+    dbMocks.getWebinarRegistration.mockResolvedValue({
+      id: 'reg-past', webinar_id: 'w1', friend_id: 'friend-1',
+      session_start_at: SESSION_START, notified_at: 'x', created_at: 'x',
+    });
+    const res = await req(
+      `/api/liff/webinars/test-webinar?sessionStartAt=${SESSION_START}`,
+      { headers: { Authorization: 'Bearer t' } },
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.live).toBe(false);
+    expect(body.replay).toBeUndefined();
+    expect(body.playlistUrl).toBeUndefined();
+    expect(body.upcoming).toEqual([]);
+    expect(dbMocks.upsertWebinarViewer).not.toHaveBeenCalled();
+  });
+
   test('専用リンクの時刻を推測しても、本人の予約がなければ再生できない', async () => {
     vi.setSystemTime(new Date((SESSION_START + 7200 + 3600) * 1000));
     dbMocks.getWebinarRegistration.mockResolvedValue(null);
@@ -404,6 +440,78 @@ describe('GET /api/liff/webinars/:slug', () => {
       headers: { Authorization: 'Bearer t' },
     });
     expect(res.status).toBe(404);
+  });
+
+  test('公開 state は active な事前申し込みフォーム定義と introImageUrl を返す', async () => {
+    vi.setSystemTime(new Date((SESSION_START - 3600) * 1000));
+    dbMocks.getWebinarBySlug.mockResolvedValue(makeWebinar({
+      pre_registration_form_id: 'form-pre-1',
+      intro_image_url: 'https://img.example.com/h.jpg',
+    }));
+    dbMocks.getFormById.mockResolvedValue({
+      id: 'form-pre-1',
+      name: '事前申し込み',
+      description: '視聴前にご回答ください',
+      fields: JSON.stringify([{ name: 'job', label: '職業', type: 'text' }]),
+      is_active: 1,
+    });
+    const res = await req('/api/liff/webinars/test-webinar', {
+      headers: { Authorization: 'Bearer t' },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.live).toBe(false);
+    expect(body.introImageUrl).toBe('https://img.example.com/h.jpg');
+    expect(body.preRegistrationForm).toEqual({
+      id: 'form-pre-1',
+      name: '事前申し込み',
+      description: '視聴前にご回答ください',
+      fields: [{ name: 'job', label: '職業', type: 'text' }],
+    });
+  });
+
+  test('公開 state は inactive な事前申し込みフォームを null にする', async () => {
+    vi.setSystemTime(new Date((SESSION_START - 3600) * 1000));
+    dbMocks.getWebinarBySlug.mockResolvedValue(makeWebinar({
+      pre_registration_form_id: 'form-pre-1',
+    }));
+    dbMocks.getFormById.mockResolvedValue({
+      id: 'form-pre-1', name: 'x', description: null, fields: '[]', is_active: 0,
+    });
+    const res = await req('/api/liff/webinars/test-webinar', {
+      headers: { Authorization: 'Bearer t' },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.preRegistrationForm).toBeNull();
+  });
+
+  test('公開 state は事前申し込みフォーム未設定なら null を返し getFormById しない', async () => {
+    vi.setSystemTime(new Date((SESSION_START - 3600) * 1000));
+    dbMocks.getWebinarBySlug.mockResolvedValue(makeWebinar({
+      pre_registration_form_id: null,
+    }));
+    const res = await req('/api/liff/webinars/test-webinar', {
+      headers: { Authorization: 'Bearer t' },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.preRegistrationForm).toBeNull();
+    expect(dbMocks.getFormById).not.toHaveBeenCalled();
+  });
+
+  test('ライブ中の state にも preRegistrationForm を載せる', async () => {
+    dbMocks.getWebinarBySlug.mockResolvedValue(makeWebinar({
+      pre_registration_form_id: 'form-pre-1',
+    }));
+    dbMocks.getFormById.mockResolvedValue({
+      id: 'form-pre-1', name: '事前', description: null, fields: '[]', is_active: 1,
+    });
+    const res = await req('/api/liff/webinars/test-webinar', {
+      headers: { Authorization: 'Bearer t' },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.live).toBe(true);
+    expect(body.preRegistrationForm).toEqual({
+      id: 'form-pre-1', name: '事前', description: null, fields: [],
+    });
   });
 });
 
@@ -867,6 +975,57 @@ describe('admin CRUD', () => {
     const get = await req('/api/webinars/w1');
     const getBody = (await get.json()) as { data: Record<string, unknown> };
     expect(getBody.data.introText).toBe(introText);
+  });
+
+  test('PUT /api/webinars/:id — introImageUrl / preRegistrationFormId を保存し、GET で返す', async () => {
+    const introImageUrl = 'https://img.example.com/header.jpg';
+    const preRegistrationFormId = 'form-pre-1';
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({
+      intro_image_url: null, pre_registration_form_id: null,
+    }));
+    dbMocks.updateWebinar.mockResolvedValue(makeWebinar({
+      intro_image_url: introImageUrl, pre_registration_form_id: preRegistrationFormId,
+    }));
+    const put = await req('/api/webinars/w1', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ introImageUrl, preRegistrationFormId }),
+    });
+    expect(put.status).toBe(200);
+    expect(dbMocks.updateWebinar).toHaveBeenCalledWith(
+      expect.anything(),
+      'w1',
+      expect.objectContaining({ introImageUrl, preRegistrationFormId }),
+    );
+
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({
+      intro_image_url: introImageUrl, pre_registration_form_id: preRegistrationFormId,
+    }));
+    const get = await req('/api/webinars/w1');
+    const body = (await get.json()) as { data: Record<string, unknown> };
+    expect(body.data.introImageUrl).toBe(introImageUrl);
+    expect(body.data.preRegistrationFormId).toBe(preRegistrationFormId);
+  });
+
+  test('PUT /api/webinars/:id — introImageUrl / preRegistrationFormId を省略すると既存値を維持する', async () => {
+    const introImageUrl = 'https://img.example.com/existing.jpg';
+    const preRegistrationFormId = 'form-existing';
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({
+      intro_image_url: introImageUrl, pre_registration_form_id: preRegistrationFormId,
+    }));
+    dbMocks.updateWebinar.mockResolvedValue(makeWebinar({
+      intro_image_url: introImageUrl, pre_registration_form_id: preRegistrationFormId,
+    }));
+    const put = await req('/api/webinars/w1', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '更新後タイトル' }),
+    });
+    expect(put.status).toBe(200);
+    const patch = dbMocks.updateWebinar.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('introImageUrl');
+    expect(patch).not.toHaveProperty('preRegistrationFormId');
+    const putBody = (await put.json()) as { data: Record<string, unknown> };
+    expect(putBody.data.introImageUrl).toBe(introImageUrl);
+    expect(putBody.data.preRegistrationFormId).toBe(preRegistrationFormId);
   });
 
   test('PUT /api/webinars/:id/comments — 一括置換', async () => {

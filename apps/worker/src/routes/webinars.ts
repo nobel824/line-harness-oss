@@ -49,7 +49,9 @@ import {
 } from '@line-crm/db';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
-import { resolveSession, parseScheduleRules, upcomingSessions } from '../services/webinar-schedule.js';
+import {
+  resolveSession, parseScheduleRules, upcomingSessions, ARCHIVE_WINDOW_SECONDS,
+} from '../services/webinar-schedule.js';
 import { sendWebinarRegistrationConfirmation } from '../services/webinar-reminders.js';
 import { dispatchLineProxyLocally } from '../services/local-line-proxy.js';
 import {
@@ -69,6 +71,7 @@ const webinarRoutes = new Hono<Env>();
 const COMMENT_MAX = 500;
 const SESSION_COMMENT_LIMIT = 60;
 const TOKEN_GRACE_SECONDS = 3600;
+export { ARCHIVE_WINDOW_SECONDS } from '../services/webinar-schedule.js';
 // 開始後もこの秒数までは、その回を予約して途中参加できる。
 // ただし未予約者へ再生トークンは一切返さず、必ず予約を先に通す。
 const CURRENT_SESSION_JOIN_GRACE_SECONDS = 5 * 60;
@@ -88,6 +91,35 @@ const FUNNEL_EVENT_TYPES = new Set([
 
 function nowEpoch(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+type PublicPreRegistrationForm = {
+  id: string;
+  name: string;
+  description: string | null;
+  fields: unknown[];
+};
+
+async function loadPreRegistrationForm(
+  db: D1Database,
+  webinar: Webinar,
+): Promise<PublicPreRegistrationForm | null> {
+  const formId = webinar.pre_registration_form_id;
+  if (!formId) return null;
+  const form = await getFormById(db, formId);
+  if (!form || !form.is_active) return null;
+  let fields: unknown[] = [];
+  try {
+    fields = JSON.parse(form.fields || '[]') as unknown[];
+  } catch {
+    fields = [];
+  }
+  return {
+    id: form.id,
+    name: form.name,
+    description: form.description,
+    fields,
+  };
 }
 
 // LIFF caller を認証し、webinar とそのアカウント配下の friend を解決する。
@@ -130,6 +162,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
     const auth = await resolveWebinarCaller(c, c.req.param('slug'));
     if (auth instanceof Response) return auth;
     const { webinar } = auth;
+    const preRegistrationForm = await loadPreRegistrationForm(c.env.DB, webinar);
+    const introImageUrl = webinar.intro_image_url ?? null;
 
     const now = nowEpoch();
     const rules = parseScheduleRules(webinar.schedule_json);
@@ -151,13 +185,18 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
           )
         : null;
 
-    // 配信終了後でも、専用リンクを持つ予約済み本人には
-    // その回を先頭から再生する。アセットトークンは開くたびに再発行するため、
-    // 入場リンク自体に期限を持たせない。
+    // 配信終了後でも、専用リンクを持つ予約済み本人にはその回を先頭から再生する。
+    // ただし終了から ARCHIVE_WINDOW_SECONDS を過ぎたら replay せず、
+    // 下の通常分岐（セッション選択 / 待機ルーム）へ落とす。
+    const sessionEndedAt = requestedSessionStartAt !== null
+      ? requestedSessionStartAt + webinar.duration_seconds
+      : null;
     if (
       admissionReg &&
       requestedSessionStartAt !== null &&
-      now >= requestedSessionStartAt + webinar.duration_seconds
+      sessionEndedAt !== null &&
+      now >= sessionEndedAt &&
+      now < sessionEndedAt + ARCHIVE_WINDOW_SECONDS
     ) {
       await upsertWebinarViewer(
         c.env.DB, webinar.id, auth.friendId, requestedSessionStartAt,
@@ -181,6 +220,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         replay: true,
         title: webinar.title,
         introText: webinar.intro_text,
+        introImageUrl,
+        preRegistrationForm,
         durationSeconds: webinar.duration_seconds,
         sessionStartAt: requestedSessionStartAt,
         offsetSeconds: 0,
@@ -226,6 +267,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
           waiting: true,
           title: webinar.title,
           introText: webinar.intro_text,
+          introImageUrl,
+          preRegistrationForm,
           nextSessionAt: next,
           offsetSeconds: now - next,
           comments: comments.map((cm) => ({
@@ -245,6 +288,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         live: false,
         title: webinar.title,
         introText: webinar.intro_text,
+        introImageUrl,
+        preRegistrationForm,
         nextSessionAt: next,
         upcoming,
         registeredSessionAt: reg?.session_start_at ?? null,
@@ -272,6 +317,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
         live: false,
         title: webinar.title,
         introText: webinar.intro_text,
+        introImageUrl,
+        preRegistrationForm,
         nextSessionAt: bookable[0] ?? session.nextSessionAt,
         upcoming: bookable,
         registeredSessionAt: liveReg?.session_start_at ?? null,
@@ -298,6 +345,8 @@ webinarRoutes.get('/api/liff/webinars/:slug', async (c) => {
       live: true,
       title: webinar.title,
       introText: webinar.intro_text,
+      introImageUrl,
+      preRegistrationForm,
       durationSeconds: webinar.duration_seconds,
       sessionStartAt: session.sessionStartAt,
       offsetSeconds: session.offsetSeconds,
@@ -726,6 +775,8 @@ function serializeWebinar(row: Webinar) {
     accountId: row.account_id,
     title: row.title,
     introText: row.intro_text,
+    introImageUrl: row.intro_image_url,
+    preRegistrationFormId: row.pre_registration_form_id,
     slug: row.slug,
     status: row.status,
     videoPrefix: row.video_prefix,
@@ -746,6 +797,8 @@ interface WebinarBody {
   status?: string;
   videoPrefix?: string | null;
   introText?: string | null;
+  introImageUrl?: string | null;
+  preRegistrationFormId?: string | null;
   durationSeconds?: number;
   schedule?: unknown[];
   cta?: { label?: string; url?: string; showAtSeconds?: number } | null;
@@ -802,6 +855,12 @@ function validateWebinarBody(
     input.videoPrefix = body.videoPrefix?.replace(/^\/+|\/+$/g, '') || null;
   }
   if (body.introText !== undefined) input.introText = body.introText;
+  if (body.introImageUrl !== undefined) {
+    input.introImageUrl = body.introImageUrl?.trim() || null;
+  }
+  if (body.preRegistrationFormId !== undefined) {
+    input.preRegistrationFormId = body.preRegistrationFormId?.trim() || null;
+  }
   if (body.durationSeconds !== undefined) {
     input.durationSeconds = Math.floor(body.durationSeconds);
   }
