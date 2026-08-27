@@ -322,3 +322,72 @@ describe('jstDayWindowUtc', () => {
     expect(jstDayWindowUtc('2026-11-09').startUtc).toBe('2026-11-08T15:00:00.000Z');
   });
 });
+
+describe('PUT /api/booking/admin/staff/:id/google-calendar/busy-calendars', () => {
+  const path = '/api/booking/admin/staff/s1/google-calendar/busy-calendars?account_id=acc1';
+
+  test.each([
+    ['未指定', {}],
+    ['非配列', { busy_calendar_ids: 'secondary@example.com' }],
+    ['空文字要素', { busy_calendar_ids: [''] }],
+    ['11件', { busy_calendar_ids: Array.from({ length: 11 }, (_, index) => `calendar-${index}`) }],
+    ['改行入り', { busy_calendar_ids: ['secondary@example.com\nother@example.com'] }],
+  ])('%s は 422 invalid_busy_calendar_ids', async (_label, body) => {
+    const db = scriptedDb([
+      ['FROM staff WHERE', { first: { ok: 1 } }],
+    ]);
+    const { app, env } = makeApp(db);
+    const res = await app.request(path, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    }, env);
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'invalid_busy_calendar_ids' });
+  });
+
+  test('active 接続の busy_calendar_ids だけを更新する', async () => {
+    const db = scriptedDb([
+      ['FROM staff WHERE', { first: { ok: 1 } }],
+      ['SELECT id FROM google_calendar_connections', { first: { id: 'connection-1' } }],
+      ['SET busy_calendar_ids', { run: { meta: { changes: 1 } } }],
+    ]);
+    const { app, env } = makeApp(db);
+    const res = await app.request(path, {
+      method: 'PUT',
+      body: JSON.stringify({ busy_calendar_ids: ['  secondary@example.com  '] }),
+      headers: { 'Content-Type': 'application/json' },
+    }, env);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      busy_calendar_ids: ['secondary@example.com'],
+    });
+    const update = db.calls.find((call) => call.sql.includes('SET busy_calendar_ids'));
+    expect(update?.params).toEqual([
+      '["secondary@example.com"]',
+      'connection-1',
+      'acc1',
+      's1',
+    ]);
+  });
+
+  test('active 接続がなければ 404 connection_not_found', async () => {
+    const db = scriptedDb([
+      ['FROM staff WHERE', { first: { ok: 1 } }],
+      ['SELECT id FROM google_calendar_connections', { first: null }],
+    ]);
+    const { app, env } = makeApp(db);
+    const res = await app.request(path, {
+      method: 'PUT',
+      body: JSON.stringify({ busy_calendar_ids: [] }),
+      headers: { 'Content-Type': 'application/json' },
+    }, env);
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'connection_not_found' });
+    expect(db.calls.some((call) => call.sql.includes('SET busy_calendar_ids'))).toBe(false);
+  });
+});

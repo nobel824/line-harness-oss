@@ -1288,7 +1288,8 @@ booking.get('/api/booking/admin/staff/:id/google-calendar', async (c) => {
   }
   const connection = await c.env.DB
     .prepare(
-      `SELECT id, calendar_id, auth_type, is_active, last_verified_at, last_error
+      `SELECT id, calendar_id, auth_type, is_active, last_verified_at, last_error,
+              busy_calendar_ids
          FROM google_calendar_connections
         WHERE line_account_id = ? AND staff_id = ? AND is_active = 1
         LIMIT 1`,
@@ -1406,6 +1407,58 @@ booking.delete('/api/booking/admin/staff/:id/google-calendar', async (c) => {
     .bind(accountId, staffId)
     .run();
   return c.json({ ok: true });
+});
+
+booking.put('/api/booking/admin/staff/:id/google-calendar/busy-calendars', async (c) => {
+  const accountId = await resolveAccountIdAdmin(c);
+  if (!accountId) return c.json({ error: 'missing_account_id' }, 400);
+  const staffId = c.req.param('id');
+  if (!(await assertStaffInAccount(c.env.DB, staffId, accountId))) {
+    return c.json({ error: 'staff_not_found_in_account' }, 404);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_busy_calendar_ids' }, 422);
+  }
+  const rawIds = body && typeof body === 'object' && 'busy_calendar_ids' in body
+    ? (body as { busy_calendar_ids?: unknown }).busy_calendar_ids
+    : undefined;
+  if (!Array.isArray(rawIds) || rawIds.length > 10) {
+    return c.json({ error: 'invalid_busy_calendar_ids' }, 422);
+  }
+  const busyCalendarIds = rawIds.map((value) => typeof value === 'string' ? value.trim() : '');
+  if (rawIds.some((value, index) =>
+    typeof value !== 'string' ||
+    busyCalendarIds[index] === '' ||
+    busyCalendarIds[index].length > 1024 ||
+    /[\r\n]/.test(busyCalendarIds[index]))) {
+    return c.json({ error: 'invalid_busy_calendar_ids' }, 422);
+  }
+
+  const connection = await c.env.DB
+    .prepare(
+      `SELECT id FROM google_calendar_connections
+        WHERE line_account_id = ? AND staff_id = ? AND is_active = 1
+        LIMIT 1`,
+    )
+    .bind(accountId, staffId)
+    .first<{ id: string }>();
+  if (!connection) return c.json({ error: 'connection_not_found' }, 404);
+
+  const storedValue = busyCalendarIds.length > 0 ? JSON.stringify(busyCalendarIds) : null;
+  await c.env.DB
+    .prepare(
+      `UPDATE google_calendar_connections
+          SET busy_calendar_ids = ?,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
+        WHERE id = ? AND line_account_id = ? AND staff_id = ? AND is_active = 1`,
+    )
+    .bind(storedValue, connection.id, accountId, staffId)
+    .run();
+  return c.json({ ok: true, busy_calendar_ids: busyCalendarIds.length > 0 ? busyCalendarIds : null });
 });
 
 booking.get('/api/booking/admin/staff/:id/shifts', async (c) => {

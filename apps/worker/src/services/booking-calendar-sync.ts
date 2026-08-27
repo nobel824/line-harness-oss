@@ -11,6 +11,7 @@ export interface StaffCalendarConnection {
   auth_type: string;
   access_token: string | null;
   refresh_token: string | null;
+  busy_calendar_ids?: string | null;
 }
 
 export async function getStaffCalendarConnection(
@@ -20,13 +21,26 @@ export async function getStaffCalendarConnection(
 ): Promise<StaffCalendarConnection | null> {
   return db
     .prepare(
-      `SELECT id, calendar_id, auth_type, access_token, refresh_token
+      `SELECT id, calendar_id, auth_type, access_token, refresh_token, busy_calendar_ids
          FROM google_calendar_connections
         WHERE line_account_id = ? AND staff_id = ? AND is_active = 1
         LIMIT 1`,
     )
     .bind(lineAccountId, staffId)
     .first<StaffCalendarConnection>();
+}
+
+function parseBusyCalendarIds(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== 'string')) {
+      return [];
+    }
+    return parsed;
+  } catch {
+    return [];
+  }
 }
 
 async function clientForConnection(
@@ -51,7 +65,11 @@ async function clientForConnection(
     accessToken = connection.access_token;
   }
   if (!accessToken) throw new Error('google_calendar_access_token_missing');
-  return new GoogleCalendarClient({ calendarId: connection.calendar_id, accessToken });
+  return new GoogleCalendarClient({
+    calendarId: connection.calendar_id,
+    accessToken,
+    busyCalendarIds: parseBusyCalendarIds(connection.busy_calendar_ids),
+  });
 }
 
 export async function getStaffGoogleBusy(
