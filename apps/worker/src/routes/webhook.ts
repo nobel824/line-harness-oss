@@ -26,6 +26,7 @@ import { awardActivityMileage } from '../services/activity-mileage.js';
 import { replyViaHarnessProxy } from '../services/line-proxy-send.js';
 import type { HarnessProxyDispatch } from '../services/line-proxy-send.js';
 import { dispatchLineProxyLocally } from '../services/local-line-proxy.js';
+import { ensureSchedulerArmed } from '../durable-objects/tenant-scheduler.js';
 
 const webhook = new Hono<Env>();
 
@@ -213,6 +214,12 @@ webhook.post('/webhook', async (c) => {
   })();
 
   c.executionCtx.waitUntil(processingPromise);
+
+  // 定期ジョブ用 DO の自己修復チェック。何らかの理由で alarm チェーンが
+  // 切れていても、次に届いた webhook がここで直す。getAlarm() 1回で済む
+  // 軽さなので毎リクエストで呼んでよい。応答を遅らせないよう waitUntil に
+  // 逃がし、失敗しても webhook 応答（LINE 側の ~1s タイムアウト）には影響しない。
+  c.executionCtx.waitUntil(ensureSchedulerArmed(c.env));
 
   return c.json({ status: 'ok' }, 200);
 });
