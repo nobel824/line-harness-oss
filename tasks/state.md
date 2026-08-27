@@ -1,6 +1,6 @@
 # state — 特典→オートウェビナー→無料相談 自動導線
 
-最終更新: 2026-08-27 / フェーズ: **Phase 1 実装中（F-7 完了・予約基盤の改修へ）**
+最終更新: 2026-08-27 / フェーズ: **Phase 1 実装中（F-7 完了・予約基盤の構築中）**
 
 ## 何をしているか
 
@@ -22,6 +22,30 @@ AI顧問アカウント（`tatsuki | AI顧問` @288pnjfn / accountId `db3ca401-2
 - ウェビナー更新済み: `slug` test→**ai-x-webinar** / `durationSeconds` 3600→**3449** /
   `videoPrefix`→**webinars/ai-x-webinar** / `showAtSeconds` 2700→**2880**（実尺の83.5%）
 - **`status` はまだ `draft`**（AC-7-4 未達）。CTA を Spir から内製フォームへ切り替えてから active にする
+
+**予約基盤のセットアップ（進行中）**
+- 予約スタッフ登録済み: **`63ffc2a6-d223-4ed7-85c2-c9e6f4a7420d`**（奥田 達貴 / role=AI顧問 / is_designation_optional=1）
+  - **訂正**: 管理画面のログインスタッフは `staff_members`、予約スタッフは `staff` で**別テーブル**。
+    予約スタッフを足しても認証側には影響しない（当初 同一テーブルと誤認していた）
+- Google OAuth のクライアントをユーザーが作成し Keychain へ登録:
+  `GOOGLE_OAUTH_CLIENT_ID_AIKOMON` / `GOOGLE_OAUTH_CLIENT_SECRET_AIKOMON`
+- Worker `ai-komon` の secret に投入済み（`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`）。
+  `oauth.configured: true` を確認。**wrangler secret list --name ai-komon** で確認できる
+- **未完**: ブラウザでの OAuth 承認（ユーザー操作）。認可URLは
+  `POST /api/booking/admin/staff/<staffId>/google-calendar/oauth/start?account_id=<A>` で再発行する。
+  **state の TTL は10分**（`booking.ts:49`）なので、ユーザーが開く直前に発行すること
+- redirect URI は `https://ai-komon.nobel824.workers.dev/api/booking/google-calendar/oauth/callback`
+- OAuth スコープは `calendar.events` と `calendar.events.freebusy` の2つだけ（`google-oauth.ts:9-12`）。
+  共有されたプライベートカレンダーの freeBusy がこのスコープで引けるかは**接続後に実測で確認する**
+
+**複数カレンダー対応の実装（Grok に委譲・実行中）**
+- 委譲プロンプトは scratchpad の `grok-prompt.txt`。作業ツリーに以下が出ている:
+  - 新規 `packages/db/migrations/070_google_calendar_busy_calendars.sql`
+  - 新規 `packages/db/test/070_google_calendar_busy_calendars.test.ts`
+  - 新規 `apps/worker/src/services/booking-calendar-sync.test.ts`
+  - 変更 `google-calendar.ts` / `booking-calendar-sync.ts` / `routes/booking.ts` /
+    `google-calendar.test.ts` / `booking-admin.test.ts` / `bootstrap.sql` / `bootstrap-meta.json`
+- **未完**: 受入条件の実行（db/worker の test と typecheck）と fresh Sonnet による独立レビュー
 
 **認証まわり**
 - `npx wrangler@4 login` で OAuth 認可済み（R2 / D1 が CLI から触れる）
