@@ -1,0 +1,17 @@
+{
+  "fields": [
+    {
+      "name": "x_account_id",
+      "label": "XのアカウントID（@から始まるもの）",
+      "type": "text",
+      "required": true
+    },
+    {
+      "name": "bottleneck",
+      "label": "いま一番詰まっていると感じるところはどこですか？",
+      "type": "textarea",
+      "required": true
+    }
+  ],
+  "description": "オートウェビナー視聴中のCTAから開く。聞くのは2項目だけ（funnel-design §5）。投資可能額・フォロワー数・投稿頻度・自走/伴走希望は聞かない。2026-08-27: 事業内容と月商は事前申し込みフォームで取得するため business を削除。アカウントは URL だとブラウザを離れる必要があり障壁が高いので ID に変更した。"
+}
