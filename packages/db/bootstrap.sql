@@ -503,7 +503,7 @@ CREATE TABLE IF NOT EXISTS google_calendar_connections (
   last_error    TEXT,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-);
+, busy_calendar_ids TEXT);
 
 CREATE TABLE IF NOT EXISTS incoming_webhooks (
   id          TEXT PRIMARY KEY,

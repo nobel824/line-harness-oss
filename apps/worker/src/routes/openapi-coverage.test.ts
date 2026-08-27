@@ -126,7 +126,7 @@ const CLIENT_ONLY: readonly string[] = [
  * rich-menu-groups / integrations あたりが機能として大きい。
  */
 const KNOWN_GAPS: readonly string[] = [
-  // booking (26)
+  // booking (27)
   'DELETE /api/booking/admin/menus/{id}',
   'DELETE /api/booking/admin/staff/{id}',
   'DELETE /api/booking/admin/staff/{id}/google-calendar',
@@ -150,6 +150,9 @@ const KNOWN_GAPS: readonly string[] = [
   'PUT /api/booking/admin/menus/{id}',
   'PUT /api/booking/admin/staff/{id}',
   'PUT /api/booking/admin/staff/{id}/availability-rules',
+  // booking admin は26本まとめて未収載。この1本だけ spec 化しても発見性は上がらないため、
+  // booking admin 面をまとめて openapi.ts に載せるときに一緒に外す。
+  'PUT /api/booking/admin/staff/{id}/google-calendar/busy-calendars',
   'PUT /api/booking/admin/staff/{id}/google-calendar',
   'PUT /api/booking/admin/staff/{id}/menus',
   'PUT /api/booking/admin/staff/{id}/shifts',

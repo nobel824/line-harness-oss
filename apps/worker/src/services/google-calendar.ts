@@ -6,6 +6,7 @@ const TIMEZONE = 'Asia/Tokyo';
 export interface GoogleCalendarConfig {
   calendarId: string;
   accessToken: string;
+  busyCalendarIds?: string[];
 }
 
 export interface BusyInterval {
@@ -39,10 +40,13 @@ export class GoogleCalendarClient {
    */
   async getFreeBusy(timeMin: string, timeMax: string): Promise<BusyInterval[]> {
     const url = `${GCAL_BASE}/freeBusy`;
+    const calendarIds = Array.from(
+      new Set([this.config.calendarId, ...(this.config.busyCalendarIds ?? [])]),
+    );
     const body = {
       timeMin,
       timeMax,
-      items: [{ id: this.config.calendarId }],
+      items: calendarIds.map((id) => ({ id })),
     };
 
     const res = await fetch(url, {
@@ -60,18 +64,36 @@ export class GoogleCalendarClient {
     }
 
     const data = (await res.json()) as {
-      calendars?: Record<string, { busy?: { start: string; end: string }[] }>;
+      calendars?: Record<string, {
+        busy?: { start: string; end: string }[];
+        errors?: unknown[];
+      }>;
     };
 
-    const calendarData = data.calendars?.[this.config.calendarId];
-    const freeBusy = calendarData?.busy ?? [];
+    const busy: BusyInterval[] = [];
+    for (const calendarId of calendarIds) {
+      const calendarData = data.calendars?.[calendarId];
+      if (calendarData?.errors && calendarData.errors.length > 0) {
+        if (calendarId === this.config.calendarId) {
+          throw new Error(
+            `Google FreeBusy calendar error for ${calendarId}: ${JSON.stringify(calendarData.errors)}`,
+          );
+        }
+        console.warn(
+          `Google FreeBusy calendar error for ${calendarId}: ${JSON.stringify(calendarData.errors)}`,
+        );
+        continue;
+      }
+      busy.push(...(calendarData?.busy ?? []));
+    }
 
     // GoogleのFreeBusyは「予定あり」のイベントだけを返す。終日予定が
     // transparency=transparent（空き時間扱い）だと画面上に予定があっても返らず、
     // 予約枠が開いてしまう。events.listで終日イベントだけを補完し、終日予定は
-    // ユーザーの明示的なブロックとして扱う。
+    // ユーザーの明示的なブロックとして扱う。補完するのは主カレンダーだけで、
+    // 補助カレンダー(busyCalendarIds)はFreeBusyが返すbusyだけを見る。
     const allDayBusy = await this.getAllDayBusy(timeMin, timeMax);
-    return mergeBusyIntervals([...freeBusy, ...allDayBusy]);
+    return mergeBusyIntervals([...busy, ...allDayBusy]);
   }
 
   private async getAllDayBusy(timeMin: string, timeMax: string): Promise<BusyInterval[]> {
