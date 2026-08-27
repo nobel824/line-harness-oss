@@ -117,6 +117,7 @@ type WebinarState =
       live: true;
       replay?: boolean;
       title: string;
+      introText?: string | null;
       durationSeconds: number;
       sessionStartAt: number;
       offsetSeconds: number;
@@ -134,6 +135,7 @@ type WebinarState =
       live: false;
       waiting: true;
       title: string;
+      introText?: string | null;
       nextSessionAt: number;
       offsetSeconds: number;
       comments: WebinarSakuraComment[];
@@ -142,6 +144,7 @@ type WebinarState =
       live: false;
       waiting?: undefined;
       title: string;
+      introText?: string | null;
       nextSessionAt: number | null;
       // セッション選択メニュー: 今後の開催回 (epoch 秒) と自分の予約
       upcoming?: number[];
@@ -721,6 +724,11 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
       <div className="flex min-h-dvh flex-col items-center justify-center bg-gray-900 p-6 text-white">
         <p className="mb-2 text-sm text-gray-400">ライブ配信</p>
         <h1 className="mb-1 text-center text-xl font-bold">{state.title}</h1>
+        {state.introText ? (
+          <p className="mt-3 w-full max-w-sm whitespace-pre-line text-sm leading-relaxed text-gray-300">
+            {state.introText}
+          </p>
+        ) : null}
         {registered !== null ? (
           <div className="mt-5 w-full max-w-sm rounded-2xl bg-gray-800 p-5 text-center">
             <p className="text-sm text-[#06C755]">✅ 予約済み</p>

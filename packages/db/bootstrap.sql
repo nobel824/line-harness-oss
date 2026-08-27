@@ -1155,7 +1155,7 @@ CREATE TABLE webinars (
   tag_on_cta_click TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);
+, intro_text TEXT);
 
 CREATE INDEX idx_ad_conversion_logs_friend ON ad_conversion_logs (friend_id);
 

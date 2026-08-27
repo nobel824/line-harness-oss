@@ -7,6 +7,7 @@ export interface Webinar {
   slug: string;
   status: 'draft' | 'active' | 'archived';
   video_prefix: string | null;
+  intro_text: string | null;
   duration_seconds: number;
   schedule_json: string;
   cta_json: string | null;
@@ -135,6 +136,7 @@ export interface WebinarCreateInput {
   slug: string;
   status?: string;
   videoPrefix?: string | null;
+  introText?: string | null;
   durationSeconds?: number;
   scheduleJson?: string;
   ctaJson?: string | null;
@@ -162,14 +164,15 @@ export async function createWebinar(db: D1Database, input: WebinarCreateInput): 
   const now = jstNow();
   await db
     .prepare(
-      `INSERT INTO webinars (id, account_id, title, slug, status, video_prefix,
+      `INSERT INTO webinars (id, account_id, title, slug, status, video_prefix, intro_text,
          duration_seconds, schedule_json, cta_json, tag_on_attend, tag_on_cta_click,
          created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id, input.accountId ?? null, input.title, input.slug, input.status ?? 'draft',
-      input.videoPrefix ?? null, input.durationSeconds ?? 0, input.scheduleJson ?? '[]',
+      input.videoPrefix ?? null, input.introText ?? null,
+      input.durationSeconds ?? 0, input.scheduleJson ?? '[]',
       input.ctaJson ?? null, input.tagOnAttend ?? null, input.tagOnCtaClick ?? null,
       now, now,
     )
@@ -187,7 +190,7 @@ export async function updateWebinar(
   await db
     .prepare(
       `UPDATE webinars SET account_id = ?, title = ?, slug = ?, status = ?,
-         video_prefix = ?, duration_seconds = ?, schedule_json = ?, cta_json = ?,
+         video_prefix = ?, intro_text = ?, duration_seconds = ?, schedule_json = ?, cta_json = ?,
          tag_on_attend = ?, tag_on_cta_click = ?, updated_at = ?
        WHERE id = ?`,
     )
@@ -197,6 +200,7 @@ export async function updateWebinar(
       patch.slug ?? existing.slug,
       patch.status ?? existing.status,
       patch.videoPrefix !== undefined ? patch.videoPrefix : existing.video_prefix,
+      patch.introText !== undefined ? patch.introText : existing.intro_text,
       patch.durationSeconds ?? existing.duration_seconds,
       patch.scheduleJson ?? existing.schedule_json,
       patch.ctaJson !== undefined ? patch.ctaJson : existing.cta_json,

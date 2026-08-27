@@ -830,6 +830,45 @@ describe('admin CRUD', () => {
     expect(badSlug.status).toBe(400);
   });
 
+  test('PUT /api/webinars/:id — introText を保存し、GET で返す', async () => {
+    const introText = 'この動画で、明日から使える方法が分かります。\n今すぐご参加ください。';
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({ intro_text: null }));
+    dbMocks.updateWebinar.mockResolvedValue(makeWebinar({ intro_text: introText }));
+    const put = await req('/api/webinars/w1', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ introText }),
+    });
+    expect(put.status).toBe(200);
+    expect(dbMocks.updateWebinar).toHaveBeenCalledWith(
+      expect.anything(), 'w1', expect.objectContaining({ introText }),
+    );
+
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({ intro_text: introText }));
+    const get = await req('/api/webinars/w1');
+    const body = (await get.json()) as { data: Record<string, unknown> };
+    expect(body.data.introText).toBe(introText);
+  });
+
+  test('PUT /api/webinars/:id — introText を省略すると既存値を維持する', async () => {
+    const introText = '既存の申し込み文言';
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({ intro_text: introText }));
+    dbMocks.updateWebinar.mockResolvedValue(makeWebinar({ intro_text: introText }));
+    const put = await req('/api/webinars/w1', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '更新後タイトル' }),
+    });
+    expect(put.status).toBe(200);
+    const patch = dbMocks.updateWebinar.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('introText');
+    const putBody = (await put.json()) as { data: Record<string, unknown> };
+    expect(putBody.data.introText).toBe(introText);
+
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar({ intro_text: introText }));
+    const get = await req('/api/webinars/w1');
+    const getBody = (await get.json()) as { data: Record<string, unknown> };
+    expect(getBody.data.introText).toBe(introText);
+  });
+
   test('PUT /api/webinars/:id/comments — 一括置換', async () => {
     dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
     dbMocks.replaceWebinarComments.mockResolvedValue(2);

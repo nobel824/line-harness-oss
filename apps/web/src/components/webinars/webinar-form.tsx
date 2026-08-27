@@ -37,6 +37,9 @@ export interface WebinarFormProps {
 export default function WebinarForm({ initial }: WebinarFormProps) {
   const router = useRouter()
   const [title, setTitle] = useState(initial?.title ?? '')
+  const [introText, setIntroText] = useState(
+    (initial as { introText?: string | null } | undefined)?.introText ?? '',
+  )
   const [slug, setSlug] = useState(initial?.slug ?? '')
   const [status, setStatus] = useState<Webinar['status']>(initial?.status ?? 'draft')
   const [videoPrefix, setVideoPrefix] = useState(initial?.videoPrefix ?? '')
@@ -82,8 +85,9 @@ export default function WebinarForm({ initial }: WebinarFormProps) {
   const save = async () => {
     setSaving(true)
     setError(null)
-    const input: WebinarInput = {
+    const input: WebinarInput & { introText: string | null } = {
       title,
+      introText: introText.trim() || null,
       slug,
       status,
       videoPrefix: videoPrefix.trim() || null,
@@ -120,6 +124,16 @@ export default function WebinarForm({ initial }: WebinarFormProps) {
         <div>
           <label className={labelClass}>タイトル</label>
           <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputClass} />
+        </div>
+        <div>
+          <label className={labelClass}>申し込み文言（セッション選択画面に表示）</label>
+          <textarea
+            value={introText}
+            onChange={(e) => setIntroText(e.target.value)}
+            rows={5}
+            placeholder="この動画で何が分かるのか、なぜ今観るのかを書きます（改行はそのまま反映されます）"
+            className={inputClass}
+          />
         </div>
         <div>
           <label className={labelClass}>状態</label>
