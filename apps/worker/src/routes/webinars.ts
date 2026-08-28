@@ -919,6 +919,7 @@ function serializeWebinarFollowupConfig(row: WebinarFollowupConfig) {
     bookingSecondDelayMinutes: row.booking_second_delay_minutes,
     bookingMenuId: row.booking_menu_id,
     bookingUrl: row.booking_url,
+    adminNotifyLineUserId: row.admin_notify_line_user_id,
   };
 }
 
@@ -969,6 +970,15 @@ function parseWebinarFollowupConfigPatch(
     }
     patch.bookingMenuId = typeof body.bookingMenuId === 'string'
       ? body.bookingMenuId.trim() || null
+      : null;
+  }
+
+  if (body.adminNotifyLineUserId !== undefined) {
+    if (body.adminNotifyLineUserId !== null && typeof body.adminNotifyLineUserId !== 'string') {
+      return 'invalid_admin_notify_line_user_id';
+    }
+    patch.adminNotifyLineUserId = typeof body.adminNotifyLineUserId === 'string'
+      ? body.adminNotifyLineUserId.trim() || null
       : null;
   }
 

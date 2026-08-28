@@ -27,6 +27,7 @@ export class WebinarConsultationError extends Error {
 
 interface ConsultationContext {
   bookingUrl: string | null;
+  adminNotifyLineUserId: string | null;
   menuId: string;
   menuName: string;
   durationMinutes: number;
@@ -98,12 +99,16 @@ async function loadContext(
 
   const config = await db
     .prepare(
-      `SELECT booking_menu_id, booking_url
+      `SELECT booking_menu_id, booking_url, admin_notify_line_user_id
          FROM webinar_followup_configs
         WHERE webinar_id = ? AND is_active = 1`,
     )
     .bind(input.webinarId)
-    .first<{ booking_menu_id: string | null; booking_url: string | null }>();
+    .first<{
+      booking_menu_id: string | null;
+      booking_url: string | null;
+      admin_notify_line_user_id: string | null;
+    }>();
   if (!config?.booking_menu_id) {
     throw new WebinarConsultationError('consultation_not_configured', 404);
   }
@@ -155,6 +160,7 @@ async function loadContext(
   );
   return {
     bookingUrl: config.booking_url,
+    adminNotifyLineUserId: config.admin_notify_line_user_id,
     menuId: offered.menu_id,
     menuName: offered.menu_name,
     durationMinutes: offered.duration_minutes,
@@ -464,12 +470,14 @@ export async function bookWebinarConsultation(
     console.error('webinar consultation confirmation LINE failed:', error);
   }
 
+  const adminNotifyLineUserId =
+    context.adminNotifyLineUserId || input.adminNotifyLineUserId;
   try {
-    if (recipient && input.adminNotifyLineUserId) {
+    if (recipient && adminNotifyLineUserId) {
       await pushViaHarnessProxy(
         input.proxyBaseUrl,
         recipient.channel_access_token,
-        input.adminNotifyLineUserId,
+        adminNotifyLineUserId,
         [{
           type: 'text',
           text: renderAdminNotificationText(

@@ -822,7 +822,7 @@ const spec = {
         tags: ['Webinars'],
         summary: 'ウェビナー追客設定の部分更新',
         description:
-          '`isActive`、`stageEnabledAt`、`bookingUrl`、`bookingMenuId` を部分更新する。' +
+          '`isActive`、`stageEnabledAt`、`bookingUrl`、`bookingMenuId`、`adminNotifyLineUserId` を部分更新する。' +
           '`stageEnabledAt` は ISO 8601 文字列または `"now"`。`isActive:true` と同時に省略すると現在時刻を設定する。',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
@@ -837,6 +837,7 @@ const spec = {
                   stageEnabledAt: { type: 'string', description: 'ISO 8601 または `now`' },
                   bookingUrl: { type: 'string', nullable: true },
                   bookingMenuId: { type: 'string', nullable: true },
+                  adminNotifyLineUserId: { type: 'string', nullable: true },
                 },
               },
             },

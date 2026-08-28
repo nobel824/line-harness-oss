@@ -50,7 +50,8 @@ describe('webinar follow-up config helpers', () => {
       'booking_delay_minutes INTEGER NOT NULL DEFAULT 30, ' +
       'booking_second_delay_minutes INTEGER NOT NULL DEFAULT 1440, ' +
       'booking_menu_id TEXT, ' +
-      'booking_url TEXT)',
+      'booking_url TEXT, ' +
+      'admin_notify_line_user_id TEXT)',
     );
   });
 
@@ -62,6 +63,7 @@ describe('webinar follow-up config helpers', () => {
       stageEnabledAt: '2026-08-28T12:34:56.000+09:00',
       bookingMenuId: 'menu-1',
       bookingUrl: 'https://example.com/booking',
+      adminNotifyLineUserId: 'UADMIN',
     });
 
     expect(config).toMatchObject({
@@ -72,6 +74,7 @@ describe('webinar follow-up config helpers', () => {
       stage_enabled_at: '2026-08-28T12:34:56.000+09:00',
       booking_menu_id: 'menu-1',
       booking_url: 'https://example.com/booking',
+      admin_notify_line_user_id: 'UADMIN',
     });
     expect(config.enabled_at).toMatch(/T/);
   });
@@ -83,6 +86,7 @@ describe('webinar follow-up config helpers', () => {
       stageEnabledAt: '2026-08-28T12:34:56.000+09:00',
       bookingMenuId: 'menu-1',
       bookingUrl: 'https://example.com/booking',
+      adminNotifyLineUserId: 'UADMIN',
     });
 
     const updated = await upsertWebinarFollowupConfig(db, 'webinar-1', {
@@ -95,6 +99,7 @@ describe('webinar follow-up config helpers', () => {
       stage_enabled_at: '2026-08-28T12:34:56.000+09:00',
       booking_menu_id: 'menu-1',
       booking_url: null,
+      admin_notify_line_user_id: 'UADMIN',
     });
     expect(await getWebinarFollowupConfig(db, 'webinar-1')).toEqual(updated);
   });
