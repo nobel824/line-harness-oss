@@ -23,3 +23,6 @@ apps/worker/dist/
 .line-harness-setup.json
 .line-harness-config.json
 tasks/_review/
+
+# Claude Code local dev-server config (machine-local paths)
+.claude/launch.json

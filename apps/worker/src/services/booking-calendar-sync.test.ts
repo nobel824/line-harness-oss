@@ -37,14 +37,25 @@ describe('getStaffGoogleBusy', () => {
     ['非配列 JSON', '{"secondary":"calendar@example.com"}'],
     ['非文字列要素を含む JSON', '["secondary@example.com", 123]'],
   ])('%s は補助カレンダーなしとして扱う', async (_label, busyCalendarIds) => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        calendars: {
-          'primary@example.com': {
-            busy: [{ start: 'primary-start', end: 'primary-end' }],
-          },
-        },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    // FreeBusy と、終日予定を補完する events.list の両方に応答させる。
+    // Response を毎回作り直さないと 2 回目の body 読み取りで
+    // "Body has already been read" になる。
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (input: RequestInfo | URL): Promise<Response> => {
+        const body = String(input).includes('/freeBusy')
+          ? {
+              calendars: {
+                'primary@example.com': {
+                  busy: [{ start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' }],
+                },
+              },
+            }
+          : { items: [] };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
     );
     const db = stubDb(busyCalendarIds);
 
@@ -54,7 +65,7 @@ describe('getStaffGoogleBusy', () => {
       timeMin: '2026-08-20T00:00:00.000Z',
       timeMax: '2026-08-21T00:00:00.000Z',
     })).resolves.toEqual([
-      { start: 'primary-start', end: 'primary-end' },
+      { start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' },
     ]);
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(init?.body)).items).toEqual([

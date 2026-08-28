@@ -14,6 +14,13 @@ export interface BusyInterval {
   end: string;
 }
 
+interface CalendarEvent {
+  status?: string;
+  eventType?: string;
+  start?: { date?: string; dateTime?: string };
+  end?: { date?: string; dateTime?: string };
+}
+
 export interface CreateEventInput {
   summary: string;
   start: string;   // ISO datetime string
@@ -79,7 +86,59 @@ export class GoogleCalendarClient {
       }
       busy.push(...(calendarData?.busy ?? []));
     }
-    return busy;
+
+    // GoogleのFreeBusyは「予定あり」のイベントだけを返す。終日予定が
+    // transparency=transparent（空き時間扱い）だと画面上に予定があっても返らず、
+    // 予約枠が開いてしまう。events.listで終日イベントだけを補完し、終日予定は
+    // ユーザーの明示的なブロックとして扱う。
+    // 終日イベントの補完は挙動変更範囲を抑えるため主カレンダーだけを対象にする。
+    const allDayBusy = await this.getAllDayBusy(timeMin, timeMax);
+    return mergeBusyIntervals([...busy, ...allDayBusy]);
+  }
+
+  private async getAllDayBusy(timeMin: string, timeMax: string): Promise<BusyInterval[]> {
+    const intervals: BusyInterval[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const url = new URL(
+        `${GCAL_BASE}/calendars/${encodeURIComponent(this.config.calendarId)}/events`,
+      );
+      url.searchParams.set('timeMin', timeMin);
+      url.searchParams.set('timeMax', timeMax);
+      url.searchParams.set('timeZone', TIMEZONE);
+      url.searchParams.set('singleEvents', 'true');
+      url.searchParams.set('showDeleted', 'false');
+      url.searchParams.set('maxResults', '2500');
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${this.config.accessToken}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Google Calendar events.list error ${res.status}: ${text}`);
+      }
+
+      const data = (await res.json()) as {
+        items?: CalendarEvent[];
+        nextPageToken?: string;
+      };
+      for (const event of data.items ?? []) {
+        if (event.status === 'cancelled') continue;
+        // 誕生日と勤務場所はカレンダー上の情報表示であり、面談不可日ではない。
+        if (event.eventType === 'birthday' || event.eventType === 'workingLocation') continue;
+        if (!event.start?.date || !event.end?.date) continue;
+        intervals.push({
+          start: new Date(`${event.start.date}T00:00:00+09:00`).toISOString(),
+          // Google Calendarの終日イベントのend.dateは排他的。
+          end: new Date(`${event.end.date}T00:00:00+09:00`).toISOString(),
+        });
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+
+    return intervals;
   }
 
   /**
@@ -198,4 +257,26 @@ export class GoogleCalendarClient {
       throw new Error(`Google Calendar deleteEvent error ${res.status}: ${text}`);
     }
   }
+}
+
+function mergeBusyIntervals(intervals: BusyInterval[]): BusyInterval[] {
+  const sorted = intervals
+    .filter((interval) => {
+      const start = new Date(interval.start).getTime();
+      const end = new Date(interval.end).getTime();
+      return Number.isFinite(start) && Number.isFinite(end) && start < end;
+    })
+    .sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime());
+  const merged: BusyInterval[] = [];
+  for (const interval of sorted) {
+    const last = merged.at(-1);
+    if (!last || new Date(interval.start).getTime() > new Date(last.end).getTime()) {
+      merged.push({ ...interval });
+      continue;
+    }
+    if (new Date(interval.end).getTime() > new Date(last.end).getTime()) {
+      last.end = interval.end;
+    }
+  }
+  return merged;
 }
