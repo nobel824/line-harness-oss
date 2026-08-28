@@ -158,17 +158,15 @@ function buildArchiveClosingText(title: string, watch: ArchiveClosingWatch): str
     lastPosition > 0 &&
     (ctaAt === null || lastPosition < ctaAt || !watch.formId || !watch.consultationUrl)
   ) {
-    const remainingMinutes = Math.max(
-      0,
-      Math.round((watch.durationSeconds - lastPosition) / 60),
-    );
+    // 残り時間の丸めは remainingWatchLine に寄せる。素で分計算すると、
+    // 完走に近い人へ「※残りは約0分です。」が届く。
     return (
       `「${title}」の続きが見られるのは、本日 ${deadline} までです。\n\n` +
       `いちばんお伝えしたいのは終盤です。\n` +
       `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
       `続きはこちらから👇\n` +
       `${watch.admissionUrl}\n\n` +
-      `※残りは約${remainingMinutes}分です。`
+      remainingWatchLine(watch.durationSeconds, lastPosition)
     );
   }
 
