@@ -819,6 +819,8 @@ function serializeWebinar(row: Webinar) {
     cta: row.cta_json ? (JSON.parse(row.cta_json) as unknown) : null,
     tagOnAttend: row.tag_on_attend,
     tagOnCtaClick: row.tag_on_cta_click,
+    funnelEntryTagId: row.funnel_entry_tag_id,
+    funnelInviteTagId: row.funnel_invite_tag_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -838,6 +840,8 @@ interface WebinarBody {
   cta?: { label?: string; url?: string; showAtSeconds?: number } | null;
   tagOnAttend?: string | null;
   tagOnCtaClick?: string | null;
+  funnelEntryTagId?: string | null;
+  funnelInviteTagId?: string | null;
 }
 
 // body → createWebinar/updateWebinar input。不正なら string (エラーコード) を返す
@@ -902,6 +906,8 @@ function validateWebinarBody(
   if (ctaJson !== undefined) input.ctaJson = ctaJson;
   if (body.tagOnAttend !== undefined) input.tagOnAttend = body.tagOnAttend;
   if (body.tagOnCtaClick !== undefined) input.tagOnCtaClick = body.tagOnCtaClick;
+  if (body.funnelEntryTagId !== undefined) input.funnelEntryTagId = body.funnelEntryTagId;
+  if (body.funnelInviteTagId !== undefined) input.funnelInviteTagId = body.funnelInviteTagId;
   return input;
 }
 
@@ -1330,6 +1336,8 @@ webinarRoutes.get('/api/webinars/:id/analytics', async (c) => {
           registrations: journey.registrations,
           viewers: journey.viewers,
           formSubmissions: journey.form_submissions,
+          entryTagFriends: journey.entry_tag_friends,
+          inviteTagFriends: journey.invite_tag_friends,
           followups: journey.followups,
           journeyFollowups: journey.journey_followups,
         },

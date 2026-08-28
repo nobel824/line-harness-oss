@@ -15,6 +15,8 @@ export interface Webinar {
   cta_json: string | null;
   tag_on_attend: string | null;
   tag_on_cta_click: string | null;
+  funnel_entry_tag_id: string | null;
+  funnel_invite_tag_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -149,6 +151,8 @@ export interface WebinarJourneyStats {
   registrations: number;
   viewers: number;
   form_submissions: number;
+  entry_tag_friends: number | null;
+  invite_tag_friends: number | null;
   followups: Record<WebinarFollowupKind, Record<WebinarFollowupStatus, number>>;
   journey_followups: Record<
     WebinarJourneyFollowupKind,
@@ -170,6 +174,8 @@ export interface WebinarCreateInput {
   ctaJson?: string | null;
   tagOnAttend?: string | null;
   tagOnCtaClick?: string | null;
+  funnelEntryTagId?: string | null;
+  funnelInviteTagId?: string | null;
 }
 
 export async function getWebinarFollowupConfig(
@@ -280,8 +286,9 @@ export async function createWebinar(db: D1Database, input: WebinarCreateInput): 
       `INSERT INTO webinars (id, account_id, title, slug, status, video_prefix, intro_text,
          intro_image_url, pre_registration_form_id,
          duration_seconds, schedule_json, cta_json, tag_on_attend, tag_on_cta_click,
+         funnel_entry_tag_id, funnel_invite_tag_id,
          created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id, input.accountId ?? null, input.title, input.slug, input.status ?? 'draft',
@@ -289,6 +296,7 @@ export async function createWebinar(db: D1Database, input: WebinarCreateInput): 
       input.introImageUrl ?? null, input.preRegistrationFormId ?? null,
       input.durationSeconds ?? 0, input.scheduleJson ?? '[]',
       input.ctaJson ?? null, input.tagOnAttend ?? null, input.tagOnCtaClick ?? null,
+      input.funnelEntryTagId ?? null, input.funnelInviteTagId ?? null,
       now, now,
     )
     .run();
@@ -307,7 +315,8 @@ export async function updateWebinar(
       `UPDATE webinars SET account_id = ?, title = ?, slug = ?, status = ?,
          video_prefix = ?, intro_text = ?, intro_image_url = ?, pre_registration_form_id = ?,
          duration_seconds = ?, schedule_json = ?, cta_json = ?,
-         tag_on_attend = ?, tag_on_cta_click = ?, updated_at = ?
+         tag_on_attend = ?, tag_on_cta_click = ?,
+         funnel_entry_tag_id = ?, funnel_invite_tag_id = ?, updated_at = ?
        WHERE id = ?`,
     )
     .bind(
@@ -326,6 +335,12 @@ export async function updateWebinar(
       patch.ctaJson !== undefined ? patch.ctaJson : existing.cta_json,
       patch.tagOnAttend !== undefined ? patch.tagOnAttend : existing.tag_on_attend,
       patch.tagOnCtaClick !== undefined ? patch.tagOnCtaClick : existing.tag_on_cta_click,
+      patch.funnelEntryTagId !== undefined
+        ? patch.funnelEntryTagId
+        : existing.funnel_entry_tag_id,
+      patch.funnelInviteTagId !== undefined
+        ? patch.funnelInviteTagId
+        : existing.funnel_invite_tag_id,
       jstNow(), id,
     )
     .run();
@@ -539,6 +554,10 @@ type WebinarJourneyCountRow = {
   form_submissions: number;
 };
 
+type WebinarTagFriendCountRow = {
+  count: number;
+};
+
 type WebinarFollowupCountRow = {
   kind: string;
   status: string;
@@ -589,14 +608,23 @@ export async function getWebinarJourneyStats(
   db: D1Database,
   webinarId: string,
 ): Promise<WebinarJourneyStats> {
-  const [counts, followups, journeyFollowups] = await Promise.all([
+  const webinar = await db
+    .prepare(
+      `SELECT account_id, funnel_entry_tag_id, funnel_invite_tag_id
+         FROM webinars
+        WHERE id = ?`,
+    )
+    .bind(webinarId)
+    .first<Pick<Webinar, 'account_id' | 'funnel_entry_tag_id' | 'funnel_invite_tag_id'>>();
+
+  const [counts, followups, journeyFollowups, entryTagCount, inviteTagCount] = await Promise.all([
     db
       .prepare(
         `SELECT
-           (SELECT COUNT(*) FROM webinar_picker_opens WHERE webinar_id = ?) AS picker_opens,
-           (SELECT COUNT(*) FROM webinar_registrations WHERE webinar_id = ?) AS registrations,
-           (SELECT COUNT(*) FROM webinar_viewers WHERE webinar_id = ?) AS viewers,
-           (SELECT COUNT(*) FROM form_submissions fs
+           (SELECT COUNT(DISTINCT friend_id) FROM webinar_picker_opens WHERE webinar_id = ?) AS picker_opens,
+           (SELECT COUNT(DISTINCT friend_id) FROM webinar_registrations WHERE webinar_id = ?) AS registrations,
+           (SELECT COUNT(DISTINCT friend_id) FROM webinar_viewers WHERE webinar_id = ?) AS viewers,
+           (SELECT COUNT(DISTINCT fs.friend_id) FROM form_submissions fs
             WHERE EXISTS (
               SELECT 1 FROM webinar_ctas wc
               WHERE wc.webinar_id = ? AND wc.form_id IS NOT NULL AND wc.form_id = fs.form_id
@@ -622,6 +650,28 @@ export async function getWebinarJourneyStats(
       )
       .bind(webinarId)
       .all<WebinarFollowupCountRow>(),
+    webinar?.funnel_entry_tag_id
+      ? db
+        .prepare(
+          `SELECT COUNT(DISTINCT f.id) AS count
+             FROM friend_tags ft
+             INNER JOIN friends f ON f.id = ft.friend_id
+            WHERE ft.tag_id = ? AND f.line_account_id = ?`,
+        )
+        .bind(webinar.funnel_entry_tag_id, webinar.account_id)
+        .first<WebinarTagFriendCountRow>()
+      : Promise.resolve(null),
+    webinar?.funnel_invite_tag_id
+      ? db
+        .prepare(
+          `SELECT COUNT(DISTINCT f.id) AS count
+             FROM friend_tags ft
+             INNER JOIN friends f ON f.id = ft.friend_id
+            WHERE ft.tag_id = ? AND f.line_account_id = ?`,
+        )
+        .bind(webinar.funnel_invite_tag_id, webinar.account_id)
+        .first<WebinarTagFriendCountRow>()
+      : Promise.resolve(null),
   ]);
 
   const followupCounts = emptyWebinarFollowupCounts();
@@ -643,6 +693,8 @@ export async function getWebinarJourneyStats(
     registrations: counts?.registrations ?? 0,
     viewers: counts?.viewers ?? 0,
     form_submissions: counts?.form_submissions ?? 0,
+    entry_tag_friends: webinar?.funnel_entry_tag_id ? entryTagCount?.count ?? 0 : null,
+    invite_tag_friends: webinar?.funnel_invite_tag_id ? inviteTagCount?.count ?? 0 : null,
     followups: followupCounts,
     journey_followups: journeyFollowupCounts,
   };
