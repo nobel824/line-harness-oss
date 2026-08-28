@@ -9,8 +9,11 @@ import {
   getFormSubmissions,
   createFormSubmission,
   getFriendByLineUserId,
+  getFriendByLineUserIdForAccount,
   getFriendById,
   getLineAccountById,
+  getWebinarBySlug,
+  hasFriendSubmittedForm,
   jstNow,
   resolveDefaultLineAccount,
 } from '@line-crm/db';
@@ -124,6 +127,7 @@ function publicWebhookConfig(row: DbForm): {
 function serializePublicForm(
   row: DbForm,
   consultationWebinarSlug: string | null = null,
+  alreadySubmitted = false,
 ) {
   return {
     id: row.id,
@@ -138,6 +142,7 @@ function serializePublicForm(
     // CTA. The slug is public routing information; menu/staff IDs remain
     // server-side authorities and are never accepted from the browser.
     consultationWebinarSlug,
+    alreadySubmitted,
     ...publicWebhookConfig(row),
   };
 }
@@ -206,12 +211,41 @@ forms.get('/api/forms/:id', async (c) => {
     if (!form) {
       return c.json({ success: false, error: 'Form not found' }, 404);
     }
-    const data = c.get('staff')
-      ? serializeForm(form, { liffId: (await resolveDefaultLineAccount(c.env.DB))?.liff_id ?? null })
-      : serializePublicForm(
-          form,
-          await consultationWebinarSlugForForm(c.env.DB, id),
+    if (c.get('staff')) {
+      const data = serializeForm(form, {
+        liffId: (await resolveDefaultLineAccount(c.env.DB))?.liff_id ?? null,
+      });
+      return c.json({ success: true, data });
+    }
+
+    const consultationWebinarSlug = await consultationWebinarSlugForForm(c.env.DB, id);
+    let alreadySubmitted = false;
+
+    if (consultationWebinarSlug) {
+      try {
+        const lineUserId = await verifyCallerLineUserId(
+          c.req.header('Authorization'),
+          c.env,
         );
+        if (lineUserId) {
+          const webinar = await getWebinarBySlug(c.env.DB, consultationWebinarSlug);
+          if (webinar) {
+            const friend = await getFriendByLineUserIdForAccount(
+              c.env.DB,
+              lineUserId,
+              webinar.account_id,
+            );
+            if (friend) {
+              alreadySubmitted = await hasFriendSubmittedForm(c.env.DB, id, friend.id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('GET /api/forms/:id already submitted check error:', err);
+      }
+    }
+
+    const data = serializePublicForm(form, consultationWebinarSlug, alreadySubmitted);
     return c.json({ success: true, data });
   } catch (err) {
     console.error('GET /api/forms/:id error:', err);
