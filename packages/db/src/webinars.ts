@@ -126,12 +126,14 @@ export interface WebinarFollowupConfig {
   booking_second_delay_minutes: number;
   booking_menu_id: string | null;
   booking_url: string | null;
+  admin_notify_line_user_id: string | null;
 }
 export interface WebinarFollowupConfigPatch {
   isActive?: boolean;
   stageEnabledAt?: string | null;
   bookingUrl?: string | null;
   bookingMenuId?: string | null;
+  adminNotifyLineUserId?: string | null;
 }
 export type WebinarJourneyFollowupKind =
   | 'picker_no_registration'
@@ -177,7 +179,8 @@ export async function getWebinarFollowupConfig(
     .prepare(
       `SELECT webinar_id, enabled_at, first_delay_minutes, second_delay_minutes,
               is_active, stage_enabled_at, picker_delay_minutes, no_show_delay_minutes,
-              booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url
+              booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url,
+              admin_notify_line_user_id
          FROM webinar_followup_configs
         WHERE webinar_id = ?`,
     )
@@ -198,8 +201,9 @@ export async function upsertWebinarFollowupConfig(
         `INSERT INTO webinar_followup_configs
            (webinar_id, enabled_at, first_delay_minutes, second_delay_minutes, is_active,
             stage_enabled_at, picker_delay_minutes, no_show_delay_minutes,
-            booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url)
-         VALUES (?, ?, 30, 1440, ?, ?, 30, 30, 30, 1440, ?, ?)`,
+            booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url,
+            admin_notify_line_user_id)
+         VALUES (?, ?, 30, 1440, ?, ?, 30, 30, 30, 1440, ?, ?, ?)`,
       )
       .bind(
         webinarId,
@@ -208,6 +212,7 @@ export async function upsertWebinarFollowupConfig(
         patch.stageEnabledAt ?? null,
         patch.bookingMenuId ?? null,
         patch.bookingUrl ?? null,
+        patch.adminNotifyLineUserId ?? null,
       )
       .run();
   } else {
@@ -228,6 +233,10 @@ export async function upsertWebinarFollowupConfig(
     if (patch.bookingMenuId !== undefined) {
       sets.push('booking_menu_id = ?');
       values.push(patch.bookingMenuId);
+    }
+    if (patch.adminNotifyLineUserId !== undefined) {
+      sets.push('admin_notify_line_user_id = ?');
+      values.push(patch.adminNotifyLineUserId);
     }
     if (sets.length > 0) {
       values.push(webinarId);

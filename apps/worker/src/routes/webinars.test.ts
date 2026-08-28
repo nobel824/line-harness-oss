@@ -106,6 +106,7 @@ function makeFollowupConfig(over: Record<string, unknown> = {}) {
     booking_second_delay_minutes: 1440,
     booking_menu_id: 'menu-old',
     booking_url: 'https://example.com/old-booking',
+    admin_notify_line_user_id: null,
     ...over,
   };
 }
@@ -1210,6 +1211,19 @@ describe('admin CRUD', () => {
     expect(await res.json()).toEqual({ success: true, data: null });
   });
 
+  test('GET /api/webinars/:id/followup-config — 運営者通知先を返す', async () => {
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    dbMocks.getWebinarFollowupConfig.mockResolvedValue(makeFollowupConfig({
+      admin_notify_line_user_id: 'UADMIN',
+    }));
+    const res = await req('/api/webinars/w1/followup-config');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      success: true,
+      data: { webinarId: 'w1', adminNotifyLineUserId: 'UADMIN' },
+    });
+  });
+
   test('PUT /api/webinars/:id/followup-config — isActive と stageEnabledAt: now を同時に更新する', async () => {
     const now = '2026-08-28T12:34:56.000+09:00';
     dbMocks.jstNow.mockReturnValue(now);
@@ -1219,6 +1233,7 @@ describe('admin CRUD', () => {
       stage_enabled_at: now,
       booking_menu_id: 'menu-new',
       booking_url: 'https://example.com/new-booking',
+      admin_notify_line_user_id: 'UADMIN',
     });
     dbMocks.upsertWebinarFollowupConfig.mockResolvedValue(updated);
     const res = await reqAsStaff('/api/webinars/w1/followup-config', {
@@ -1229,6 +1244,7 @@ describe('admin CRUD', () => {
         stageEnabledAt: 'now',
         bookingUrl: 'https://example.com/new-booking',
         bookingMenuId: 'menu-new',
+        adminNotifyLineUserId: 'UADMIN',
       }),
     });
     expect(res.status).toBe(200);
@@ -1240,6 +1256,7 @@ describe('admin CRUD', () => {
         stageEnabledAt: now,
         bookingUrl: 'https://example.com/new-booking',
         bookingMenuId: 'menu-new',
+        adminNotifyLineUserId: 'UADMIN',
       },
     );
     expect(await res.json()).toMatchObject({
@@ -1250,6 +1267,7 @@ describe('admin CRUD', () => {
         stageEnabledAt: now,
         bookingMenuId: 'menu-new',
         bookingUrl: 'https://example.com/new-booking',
+        adminNotifyLineUserId: 'UADMIN',
       },
     });
   });

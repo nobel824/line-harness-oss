@@ -1050,7 +1050,7 @@ CREATE TABLE IF NOT EXISTS webinar_followup_configs (
   first_delay_minutes INTEGER NOT NULL DEFAULT 30,
   second_delay_minutes INTEGER NOT NULL DEFAULT 1440,
   is_active           INTEGER NOT NULL DEFAULT 1
-, stage_enabled_at TEXT, picker_delay_minutes INTEGER NOT NULL DEFAULT 30, no_show_delay_minutes INTEGER NOT NULL DEFAULT 30, booking_delay_minutes INTEGER NOT NULL DEFAULT 30, booking_second_delay_minutes INTEGER NOT NULL DEFAULT 1440, booking_menu_id TEXT, booking_url TEXT);
+, stage_enabled_at TEXT, picker_delay_minutes INTEGER NOT NULL DEFAULT 30, no_show_delay_minutes INTEGER NOT NULL DEFAULT 30, booking_delay_minutes INTEGER NOT NULL DEFAULT 30, booking_second_delay_minutes INTEGER NOT NULL DEFAULT 1440, booking_menu_id TEXT, booking_url TEXT, admin_notify_line_user_id TEXT);
 
 CREATE TABLE IF NOT EXISTS webinar_followups (
   id             TEXT PRIMARY KEY,
