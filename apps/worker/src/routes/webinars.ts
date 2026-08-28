@@ -39,6 +39,8 @@ import {
   getWebinarDailyStats,
   getWebinarFormFunnelStats,
   getWebinarJourneyStats,
+  getWebinarFollowupConfig,
+  upsertWebinarFollowupConfig,
   getFriendByLineUserId,
   getFriendByLineUserIdForAccount,
   getFormById,
@@ -47,6 +49,9 @@ import {
   getUpcomingWebinarRegistration,
   getWebinarRegistration,
   recordWebinarPickerOpen,
+  jstNow,
+  type WebinarFollowupConfig,
+  type WebinarFollowupConfigPatch,
 } from '@line-crm/db';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
@@ -900,6 +905,76 @@ function validateWebinarBody(
   return input;
 }
 
+function serializeWebinarFollowupConfig(row: WebinarFollowupConfig) {
+  return {
+    webinarId: row.webinar_id,
+    enabledAt: row.enabled_at,
+    firstDelayMinutes: row.first_delay_minutes,
+    secondDelayMinutes: row.second_delay_minutes,
+    isActive: Boolean(row.is_active),
+    stageEnabledAt: row.stage_enabled_at,
+    pickerDelayMinutes: row.picker_delay_minutes,
+    noShowDelayMinutes: row.no_show_delay_minutes,
+    bookingDelayMinutes: row.booking_delay_minutes,
+    bookingSecondDelayMinutes: row.booking_second_delay_minutes,
+    bookingMenuId: row.booking_menu_id,
+    bookingUrl: row.booking_url,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseWebinarFollowupConfigPatch(
+  body: unknown,
+  now: string,
+): WebinarFollowupConfigPatch | string {
+  if (!isRecord(body)) return 'invalid_body';
+  const patch: WebinarFollowupConfigPatch = {};
+
+  if (body.isActive !== undefined) {
+    if (typeof body.isActive !== 'boolean') return 'invalid_is_active';
+    patch.isActive = body.isActive;
+  }
+
+  if (body.stageEnabledAt !== undefined) {
+    if (typeof body.stageEnabledAt !== 'string') return 'invalid_stage_enabled_at';
+    const value = body.stageEnabledAt.trim();
+    if (value === 'now') {
+      patch.stageEnabledAt = now;
+    } else if (value && !Number.isNaN(Date.parse(value))) {
+      patch.stageEnabledAt = value;
+    } else {
+      return 'invalid_stage_enabled_at';
+    }
+  } else if (body.isActive === true) {
+    // Activating a stage without moving this lower bound would replay every
+    // pre-existing registration that is already due.
+    patch.stageEnabledAt = now;
+  }
+
+  if (body.bookingUrl !== undefined) {
+    if (body.bookingUrl !== null && typeof body.bookingUrl !== 'string') {
+      return 'invalid_booking_url';
+    }
+    patch.bookingUrl = typeof body.bookingUrl === 'string'
+      ? body.bookingUrl.trim() || null
+      : null;
+  }
+
+  if (body.bookingMenuId !== undefined) {
+    if (body.bookingMenuId !== null && typeof body.bookingMenuId !== 'string') {
+      return 'invalid_booking_menu_id';
+    }
+    patch.bookingMenuId = typeof body.bookingMenuId === 'string'
+      ? body.bookingMenuId.trim() || null
+      : null;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : 'no_fields';
+}
+
 webinarRoutes.get('/api/webinars', async (c) => {
   try {
     const items = await getWebinars(c.env.DB);
@@ -930,6 +1005,42 @@ webinarRoutes.post('/api/webinars', requireRole('owner', 'admin'), async (c) => 
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });
+
+webinarRoutes.get('/api/webinars/:id/followup-config', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const row = await getWebinarById(c.env.DB, id);
+    if (!row) return c.json({ success: false, error: 'Not found' }, 404);
+    const config = await getWebinarFollowupConfig(c.env.DB, id);
+    return c.json({
+      success: true,
+      data: config ? serializeWebinarFollowupConfig(config) : null,
+    });
+  } catch (err) {
+    console.error('GET /api/webinars/:id/followup-config error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+webinarRoutes.put(
+  '/api/webinars/:id/followup-config',
+  requireRole('owner', 'admin'),
+  async (c) => {
+    try {
+      const id = c.req.param('id')!;
+      const row = await getWebinarById(c.env.DB, id);
+      if (!row) return c.json({ success: false, error: 'Not found' }, 404);
+      const body = await c.req.json<unknown>();
+      const patch = parseWebinarFollowupConfigPatch(body, jstNow());
+      if (typeof patch === 'string') return c.json({ success: false, error: patch }, 400);
+      const updated = await upsertWebinarFollowupConfig(c.env.DB, id, patch);
+      return c.json({ success: true, data: serializeWebinarFollowupConfig(updated) });
+    } catch (err) {
+      console.error('PUT /api/webinars/:id/followup-config error:', err);
+      return c.json({ success: false, error: 'Internal server error' }, 500);
+    }
+  },
+);
 
 webinarRoutes.get('/api/webinars/:id', async (c) => {
   try {

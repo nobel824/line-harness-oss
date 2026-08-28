@@ -13,6 +13,7 @@ const LOOKAHEAD_DAYS = 8 + REGISTRATION_LEAD_DAYS;
 // 案内文の日数もこの定数から組み立てる (値を変えたときに文言だけ古く残らないように)。
 export const ARCHIVE_WINDOW_DAYS = 3;
 export const ARCHIVE_WINDOW_SECONDS = ARCHIVE_WINDOW_DAYS * DAY;
+export const ARCHIVE_CLOSING_LEAD_SECONDS = 6 * 60 * 60;
 
 export interface ScheduleRule {
   type: 'daily' | 'weekly' | 'once';

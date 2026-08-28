@@ -113,11 +113,32 @@ export interface WebinarFormFunnelStats {
 
 export type WebinarFollowupKind = 'after_30m' | 'after_24h';
 export type WebinarFollowupStatus = 'pending' | 'sent' | 'failed';
+export interface WebinarFollowupConfig {
+  webinar_id: string;
+  enabled_at: string;
+  first_delay_minutes: number;
+  second_delay_minutes: number;
+  is_active: number;
+  stage_enabled_at: string | null;
+  picker_delay_minutes: number;
+  no_show_delay_minutes: number;
+  booking_delay_minutes: number;
+  booking_second_delay_minutes: number;
+  booking_menu_id: string | null;
+  booking_url: string | null;
+}
+export interface WebinarFollowupConfigPatch {
+  isActive?: boolean;
+  stageEnabledAt?: string | null;
+  bookingUrl?: string | null;
+  bookingMenuId?: string | null;
+}
 export type WebinarJourneyFollowupKind =
   | 'picker_no_registration'
   | 'registered_no_show'
   | 'submitted_no_booking_30m'
-  | 'submitted_no_booking_24h';
+  | 'submitted_no_booking_24h'
+  | 'archive_closing';
 export type WebinarJourneyFollowupStatus = 'pending' | 'sent' | 'failed' | 'skipped';
 
 export interface WebinarJourneyStats {
@@ -146,6 +167,79 @@ export interface WebinarCreateInput {
   ctaJson?: string | null;
   tagOnAttend?: string | null;
   tagOnCtaClick?: string | null;
+}
+
+export async function getWebinarFollowupConfig(
+  db: D1Database,
+  webinarId: string,
+): Promise<WebinarFollowupConfig | null> {
+  return db
+    .prepare(
+      `SELECT webinar_id, enabled_at, first_delay_minutes, second_delay_minutes,
+              is_active, stage_enabled_at, picker_delay_minutes, no_show_delay_minutes,
+              booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url
+         FROM webinar_followup_configs
+        WHERE webinar_id = ?`,
+    )
+    .bind(webinarId)
+    .first<WebinarFollowupConfig>();
+}
+
+export async function upsertWebinarFollowupConfig(
+  db: D1Database,
+  webinarId: string,
+  patch: WebinarFollowupConfigPatch,
+): Promise<WebinarFollowupConfig> {
+  const existing = await getWebinarFollowupConfig(db, webinarId);
+  if (!existing) {
+    const now = jstNow();
+    await db
+      .prepare(
+        `INSERT INTO webinar_followup_configs
+           (webinar_id, enabled_at, first_delay_minutes, second_delay_minutes, is_active,
+            stage_enabled_at, picker_delay_minutes, no_show_delay_minutes,
+            booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url)
+         VALUES (?, ?, 30, 1440, ?, ?, 30, 30, 30, 1440, ?, ?)`,
+      )
+      .bind(
+        webinarId,
+        now,
+        patch.isActive === true ? 1 : 0,
+        patch.stageEnabledAt ?? null,
+        patch.bookingMenuId ?? null,
+        patch.bookingUrl ?? null,
+      )
+      .run();
+  } else {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (patch.isActive !== undefined) {
+      sets.push('is_active = ?');
+      values.push(patch.isActive ? 1 : 0);
+    }
+    if (patch.stageEnabledAt !== undefined) {
+      sets.push('stage_enabled_at = ?');
+      values.push(patch.stageEnabledAt);
+    }
+    if (patch.bookingUrl !== undefined) {
+      sets.push('booking_url = ?');
+      values.push(patch.bookingUrl);
+    }
+    if (patch.bookingMenuId !== undefined) {
+      sets.push('booking_menu_id = ?');
+      values.push(patch.bookingMenuId);
+    }
+    if (sets.length > 0) {
+      values.push(webinarId);
+      await db
+        .prepare(`UPDATE webinar_followup_configs SET ${sets.join(', ')} WHERE webinar_id = ?`)
+        .bind(...values)
+        .run();
+    }
+  }
+  const updated = await getWebinarFollowupConfig(db, webinarId);
+  if (!updated) throw new Error('webinar followup config was not persisted');
+  return updated;
 }
 
 export async function getWebinars(db: D1Database): Promise<Webinar[]> {
@@ -449,7 +543,8 @@ function isWebinarJourneyFollowupKind(value: string): value is WebinarJourneyFol
     value === 'picker_no_registration' ||
     value === 'registered_no_show' ||
     value === 'submitted_no_booking_30m' ||
-    value === 'submitted_no_booking_24h'
+    value === 'submitted_no_booking_24h' ||
+    value === 'archive_closing'
   );
 }
 
@@ -470,6 +565,7 @@ function emptyWebinarJourneyFollowupCounts(): WebinarJourneyStats['journey_follo
     registered_no_show: { pending: 0, sent: 0, failed: 0, skipped: 0 },
     submitted_no_booking_30m: { pending: 0, sent: 0, failed: 0, skipped: 0 },
     submitted_no_booking_24h: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+    archive_closing: { pending: 0, sent: 0, failed: 0, skipped: 0 },
   };
 }
 

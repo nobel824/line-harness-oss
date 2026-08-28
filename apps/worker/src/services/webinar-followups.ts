@@ -4,7 +4,12 @@
 
 import { getFriendById, getLineAccountById, jstNow } from '@line-crm/db';
 import { pushViaHarnessProxy, type HarnessProxyDispatch } from './line-proxy-send.js';
-import { ARCHIVE_WINDOW_DAYS } from './webinar-schedule.js';
+import { buildWebinarUrl } from './webinar-reminders.js';
+import {
+  ARCHIVE_CLOSING_LEAD_SECONDS,
+  ARCHIVE_WINDOW_DAYS,
+  ARCHIVE_WINDOW_SECONDS,
+} from './webinar-schedule.js';
 
 export type WebinarFollowupOptions = {
   proxyBaseUrl: string;
@@ -18,7 +23,8 @@ export type WebinarJourneyFollowupKind =
   | 'picker_no_registration'
   | 'registered_no_show'
   | 'submitted_no_booking_30m'
-  | 'submitted_no_booking_24h';
+  | 'submitted_no_booking_24h'
+  | 'archive_closing';
 
 type Candidate = {
   webinar_id: string;
@@ -46,12 +52,22 @@ type JourneyCandidate = {
   duration_seconds?: number | null;
   last_position_seconds?: number | null;
   form_cta_at_seconds?: number | null;
+  form_id?: string | null;
+  session_start_at?: number | null;
 };
 
 export type RegisteredNoShowWatch = {
   lastPositionSeconds: number | null;
   formCtaAtSeconds: number | null;
   durationSeconds: number;
+};
+
+export type ArchiveClosingWatch = RegisteredNoShowWatch & {
+  sessionStartAt: number;
+  formId: string | null;
+  admissionUrl: string;
+  pickerUrl: string;
+  consultationUrl: string | null;
 };
 
 type JourneyFollowupRow = {
@@ -108,12 +124,68 @@ function buildRegisteredNoShowText(
   );
 }
 
+function formatJstTime(epochSeconds: number): string {
+  const date = new Date((epochSeconds + 9 * 3600) * 1000);
+  return `${date.getUTCHours()}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function isArchiveClosingWatch(
+  watch: RegisteredNoShowWatch | ArchiveClosingWatch,
+): watch is ArchiveClosingWatch {
+  return 'sessionStartAt' in watch;
+}
+
+function buildArchiveClosingText(title: string, watch: ArchiveClosingWatch): string {
+  const lastPosition = watch.lastPositionSeconds;
+  const ctaAt = watch.formCtaAtSeconds;
+  const deadline = formatJstTime(
+    watch.sessionStartAt + watch.durationSeconds + ARCHIVE_WINDOW_SECONDS,
+  );
+
+  if (lastPosition === null || lastPosition === 0) {
+    return (
+      `ご予約いただいた「${title}」の入場リンクは、本日 ${deadline} で閉じます。\n\n` +
+      `まだご覧になっていなければ、それまでにどうぞ👇\n` +
+      `${watch.admissionUrl}\n\n` +
+      `見る時間が取れないときは、別の回に申し込み直せます。\n` +
+      `同じ内容を、月・水・金・土・日の20時から開催しています👇\n` +
+      `${watch.pickerUrl}\n\n` +
+      `※約57分です。カメラ・マイクは使いません。`
+    );
+  }
+
+  if (
+    lastPosition > 0 &&
+    (ctaAt === null || lastPosition < ctaAt || !watch.formId || !watch.consultationUrl)
+  ) {
+    // 残り時間の丸めは remainingWatchLine に寄せる。素で分計算すると、
+    // 完走に近い人へ「※残りは約0分です。」が届く。
+    return (
+      `「${title}」の続きが見られるのは、本日 ${deadline} までです。\n\n` +
+      `いちばんお伝えしたいのは終盤です。\n` +
+      `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
+      `続きはこちらから👇\n` +
+      `${watch.admissionUrl}\n\n` +
+      remainingWatchLine(watch.durationSeconds, lastPosition)
+    );
+  }
+
+  return (
+    `「${title}」を最後までご覧いただき、ありがとうございました。\n\n` +
+    `終盤でご案内した無料相談は、こちらから申し込めます👇\n` +
+    `${watch.consultationUrl}\n\n` +
+    `tatsukiが45分、実際にあなたのXアカウントを見ながら、\n` +
+    `いまどこが詰まっているかを一緒に整理します。料金はかかりません。\n\n` +
+    `※日程は、フォームを送信したあとその場で選べます。`
+  );
+}
+
 export function buildJourneyFollowupText(
   kind: WebinarJourneyFollowupKind,
   title: string,
   pickerUrl: string,
   bookingUrl: string | null,
-  watch?: RegisteredNoShowWatch,
+  watch?: RegisteredNoShowWatch | ArchiveClosingWatch,
 ): string | null {
   switch (kind) {
     case 'picker_no_registration':
@@ -126,7 +198,13 @@ export function buildJourneyFollowupText(
         `※約57分です。カメラ・マイクは使いません。ご覧いただくだけで参加できます。`
       );
     case 'registered_no_show':
-      return buildRegisteredNoShowText(title, pickerUrl, watch);
+      return buildRegisteredNoShowText(
+        title,
+        pickerUrl,
+        watch && !isArchiveClosingWatch(watch) ? watch : undefined,
+      );
+    case 'archive_closing':
+      return watch && isArchiveClosingWatch(watch) ? buildArchiveClosingText(title, watch) : null;
     case 'submitted_no_booking_30m':
       return (
         `無料相談のご入力ありがとうございます🙌\n\n` +
@@ -338,6 +416,58 @@ async function journeyCandidates(
     return results ?? [];
   }
 
+  if (kind === 'archive_closing') {
+    const { results } = await db.prepare(
+      `WITH latest_registrations AS (
+         SELECT r.webinar_id, r.friend_id, MAX(r.session_start_at) AS session_start_at
+         FROM webinar_registrations r
+         JOIN webinar_followup_configs cfg
+           ON cfg.webinar_id = r.webinar_id AND cfg.is_active = 1
+         WHERE datetime(r.created_at) >= datetime(COALESCE(cfg.stage_enabled_at, cfg.enabled_at))
+         GROUP BY r.webinar_id, r.friend_id
+       )
+       SELECT w.id AS webinar_id, w.account_id, lr.friend_id, w.slug, w.title,
+              cfg.booking_url, w.duration_seconds,
+              lr.session_start_at,
+              datetime(lr.session_start_at, 'unixepoch') AS source_at,
+              v.last_position_seconds,
+              (
+                SELECT MIN(wc.at_seconds) FROM webinar_ctas wc
+                WHERE wc.webinar_id = w.id AND wc.kind = 'form'
+              ) AS form_cta_at_seconds,
+              (
+                SELECT wc.form_id FROM webinar_ctas wc
+                WHERE wc.webinar_id = w.id AND wc.kind = 'form'
+                ORDER BY wc.at_seconds ASC LIMIT 1
+              ) AS form_id
+       FROM latest_registrations lr
+       JOIN webinars w ON w.id = lr.webinar_id
+       JOIN webinar_followup_configs cfg
+         ON cfg.webinar_id = w.id AND cfg.is_active = 1
+       LEFT JOIN webinar_viewers v
+         ON v.webinar_id = lr.webinar_id
+        AND v.friend_id = lr.friend_id
+        AND v.session_start_at = lr.session_start_at
+       WHERE lr.session_start_at + w.duration_seconds + ${ARCHIVE_WINDOW_SECONDS}
+               - ${ARCHIVE_CLOSING_LEAD_SECONDS} <= unixepoch(?)
+         AND NOT EXISTS (
+           SELECT 1 FROM webinar_viewers clicked
+           WHERE clicked.webinar_id = lr.webinar_id
+             AND clicked.friend_id = lr.friend_id
+             AND clicked.cta_clicked_at IS NOT NULL
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM webinar_journey_followups jf
+           WHERE jf.webinar_id = lr.webinar_id
+             AND jf.friend_id = lr.friend_id
+             AND jf.kind = ?
+         )
+       ORDER BY lr.session_start_at ASC
+       LIMIT 50`,
+    ).bind(cutoff, kind).all<JourneyCandidate>();
+    return results ?? [];
+  }
+
   const delayColumn = kind === 'submitted_no_booking_30m'
     ? 'booking_delay_minutes'
     : 'booking_second_delay_minutes';
@@ -443,24 +573,37 @@ export async function processWebinarFollowups(
   options: WebinarFollowupOptions,
 ): Promise<{ sent: number; failed: number }> {
   const now = jstNow();
-  const due = [
-    ...(await candidates(db, 'after_30m', now)).map((candidate) => ({ candidate, kind: 'after_30m' as const })),
-    ...(await candidates(db, 'after_24h', now)).map((candidate) => ({ candidate, kind: 'after_24h' as const })),
-  ];
-  const journeyDue = [
-    ...(await journeyCandidates(db, 'picker_no_registration', now)).map((candidate) => ({
-      candidate, kind: 'picker_no_registration' as const,
-    })),
-    ...(await journeyCandidates(db, 'registered_no_show', now)).map((candidate) => ({
-      candidate, kind: 'registered_no_show' as const,
-    })),
-    ...(await journeyCandidates(db, 'submitted_no_booking_30m', now)).map((candidate) => ({
-      candidate, kind: 'submitted_no_booking_30m' as const,
-    })),
-    ...(await journeyCandidates(db, 'submitted_no_booking_24h', now)).map((candidate) => ({
-      candidate, kind: 'submitted_no_booking_24h' as const,
-    })),
-  ];
+  const followupKinds = ['after_30m', 'after_24h'] as const;
+  const followupResults = await Promise.allSettled(
+    followupKinds.map((kind) => candidates(db, kind, now)),
+  );
+  const due = followupResults.flatMap((result, index) => {
+    const kind = followupKinds[index];
+    if (result.status === 'rejected') {
+      console.error('webinar followup candidate error:', kind, result.reason);
+      return [];
+    }
+    return result.value.map((candidate) => ({ candidate, kind }));
+  });
+
+  const journeyKinds = [
+    'picker_no_registration',
+    'registered_no_show',
+    'submitted_no_booking_30m',
+    'submitted_no_booking_24h',
+    'archive_closing',
+  ] as const;
+  const journeyResults = await Promise.allSettled(
+    journeyKinds.map((kind) => journeyCandidates(db, kind, now)),
+  );
+  const journeyDue = journeyResults.flatMap((result, index) => {
+    const kind = journeyKinds[index];
+    if (result.status === 'rejected') {
+      console.error('webinar journey candidate error:', kind, result.reason);
+      return [];
+    }
+    return result.value.map((candidate) => ({ candidate, kind }));
+  });
   let sent = 0;
   let failed = 0;
   for (const { candidate, kind } of due) {
@@ -509,7 +652,20 @@ export async function processWebinarFollowups(
   }
 
   for (const { candidate, kind } of journeyDue) {
-    const followup = await getOrCreateJourneyFollowup(db, candidate, kind);
+    let followup: JourneyFollowupRow;
+    try {
+      followup = await getOrCreateJourneyFollowup(db, candidate, kind);
+    } catch (err) {
+      console.error(
+        'webinar journey followup persistence error:',
+        candidate.webinar_id,
+        candidate.friend_id,
+        kind,
+        err,
+      );
+      failed++;
+      continue;
+    }
     if (followup.status === 'sent' || followup.status === 'skipped') continue;
     try {
       const friend = await getFriendById(db, candidate.friend_id);
@@ -523,18 +679,40 @@ export async function processWebinarFollowups(
       const delivery = await deliveryConfig(db, candidate.account_id, options);
       if (!delivery.liffId) throw new Error('LIFF ID not configured');
       const pickerUrl = webinarPickerUrl(delivery.liffId, candidate.slug);
+      const watch = kind === 'registered_no_show'
+        ? {
+            lastPositionSeconds: candidate.last_position_seconds ?? null,
+            formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
+            durationSeconds: candidate.duration_seconds ?? 0,
+          }
+        : kind === 'archive_closing'
+          ? (() => {
+              if (candidate.session_start_at === null || candidate.session_start_at === undefined) {
+                throw new Error('archive_closing candidate has no session_start_at');
+              }
+              const formId = candidate.form_id ?? null;
+              return {
+                lastPositionSeconds: candidate.last_position_seconds ?? null,
+                formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
+                durationSeconds: candidate.duration_seconds ?? 0,
+                sessionStartAt: candidate.session_start_at,
+                formId,
+                admissionUrl: buildWebinarUrl(
+                  delivery.liffId,
+                  candidate.slug,
+                  candidate.session_start_at,
+                ),
+                pickerUrl,
+                consultationUrl: formId ? formUrl(delivery.liffId, formId) : null,
+              };
+            })()
+          : undefined;
       const text = buildJourneyFollowupText(
         kind,
         candidate.title,
         pickerUrl,
         candidate.booking_url,
-        kind === 'registered_no_show'
-          ? {
-              lastPositionSeconds: candidate.last_position_seconds ?? null,
-              formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
-              durationSeconds: candidate.duration_seconds ?? 0,
-            }
-          : undefined,
+        watch,
       );
       if (text === null) {
         await db.prepare(
