@@ -1407,6 +1407,8 @@ describe('admin CRUD', () => {
       registrations: 12,
       viewers: 8,
       form_submissions: 4,
+      entry_tag_friends: 39,
+      invite_tag_friends: 11,
       followups: {
         after_30m: { pending: 2, sent: 5, failed: 1 },
         after_24h: { pending: 1, sent: 3, failed: 0 },
@@ -1470,6 +1472,8 @@ describe('admin CRUD', () => {
       registrations: 12,
       viewers: 8,
       formSubmissions: 4,
+      entryTagFriends: 39,
+      inviteTagFriends: 11,
       followups: {
         after_30m: { pending: 2, sent: 5, failed: 1 },
         after_24h: { pending: 1, sent: 3, failed: 0 },

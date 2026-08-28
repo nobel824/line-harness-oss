@@ -1161,7 +1161,7 @@ CREATE TABLE IF NOT EXISTS webinars (
   tag_on_cta_click TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-, intro_text TEXT, intro_image_url TEXT, pre_registration_form_id TEXT REFERENCES forms(id));
+, intro_text TEXT, intro_image_url TEXT, pre_registration_form_id TEXT REFERENCES forms(id), funnel_entry_tag_id TEXT, funnel_invite_tag_id TEXT);
 
 CREATE INDEX IF NOT EXISTS idx_ad_conversion_logs_friend ON ad_conversion_logs (friend_id);
 

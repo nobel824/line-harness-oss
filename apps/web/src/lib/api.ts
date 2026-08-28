@@ -2197,6 +2197,10 @@ export type Webinar = {
   cta: { label: string; url: string; showAtSeconds: number } | null
   tagOnAttend: string | null
   tagOnCtaClick: string | null
+  // 導線の上流2段を分析に出すための参照。ウェビナーが付けるタグではなく、
+  // 別システムが付けたタグを「分母」として読むだけ。null は未設定。
+  funnelEntryTagId?: string | null
+  funnelInviteTagId?: string | null
   createdAt: string
   updatedAt: string
 }

@@ -28,20 +28,28 @@ describe('getWebinarJourneyStats', () => {
   beforeEach(() => {
     sqlite = new Database(':memory:');
     sqlite.exec(`
+      CREATE TABLE webinars (
+        id TEXT PRIMARY KEY,
+        account_id TEXT,
+        funnel_entry_tag_id TEXT,
+        funnel_invite_tag_id TEXT
+      );
+      CREATE TABLE friends (id TEXT PRIMARY KEY, line_account_id TEXT);
+      CREATE TABLE friend_tags (friend_id TEXT NOT NULL, tag_id TEXT NOT NULL);
       CREATE TABLE webinar_picker_opens (
-        id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL
+        id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL, friend_id TEXT NOT NULL
       );
       CREATE TABLE webinar_registrations (
-        id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL
+        id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL, friend_id TEXT NOT NULL
       );
       CREATE TABLE webinar_viewers (
-        id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL
+        id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL, friend_id TEXT NOT NULL
       );
       CREATE TABLE webinar_ctas (
         id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL, form_id TEXT
       );
       CREATE TABLE form_submissions (
-        id TEXT PRIMARY KEY, form_id TEXT NOT NULL
+        id TEXT PRIMARY KEY, form_id TEXT NOT NULL, friend_id TEXT
       );
       CREATE TABLE webinar_followups (
         id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL
@@ -50,16 +58,20 @@ describe('getWebinarJourneyStats', () => {
         id TEXT PRIMARY KEY, webinar_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL
       );
 
-      INSERT INTO webinar_picker_opens VALUES ('picker-1', 'webinar-1');
-      INSERT INTO webinar_picker_opens VALUES ('picker-2', 'webinar-1');
-      INSERT INTO webinar_registrations VALUES ('registration-1', 'webinar-1');
-      INSERT INTO webinar_registrations VALUES ('registration-2', 'webinar-1');
-      INSERT INTO webinar_viewers VALUES ('viewer-1', 'webinar-1');
+      INSERT INTO webinars VALUES ('webinar-1', NULL, NULL, NULL);
+      INSERT INTO friends VALUES ('friend-1', 'account-1');
+      INSERT INTO friends VALUES ('friend-2', 'account-1');
+      INSERT INTO webinar_picker_opens VALUES ('picker-1', 'webinar-1', 'friend-1');
+      INSERT INTO webinar_picker_opens VALUES ('picker-2', 'webinar-1', 'friend-2');
+      INSERT INTO webinar_registrations VALUES ('registration-1', 'webinar-1', 'friend-1');
+      INSERT INTO webinar_registrations VALUES ('registration-2', 'webinar-1', 'friend-1');
+      INSERT INTO webinar_viewers VALUES ('viewer-1', 'webinar-1', 'friend-1');
       INSERT INTO webinar_ctas VALUES ('cta-1', 'webinar-1', 'form-1');
       INSERT INTO webinar_ctas VALUES ('cta-other', 'webinar-other', 'form-other');
-      INSERT INTO form_submissions VALUES ('submission-1', 'form-1');
-      INSERT INTO form_submissions VALUES ('submission-2', 'form-1');
-      INSERT INTO form_submissions VALUES ('submission-other', 'form-other');
+      INSERT INTO form_submissions VALUES ('submission-1', 'form-1', 'friend-1');
+      INSERT INTO form_submissions VALUES ('submission-2', 'form-1', 'friend-1');
+      INSERT INTO form_submissions VALUES ('submission-null', 'form-1', NULL);
+      INSERT INTO form_submissions VALUES ('submission-other', 'form-other', 'friend-2');
 
       INSERT INTO webinar_followups VALUES ('followup-1', 'webinar-1', 'after_30m', 'sent');
       INSERT INTO webinar_followups VALUES ('followup-2', 'webinar-1', 'after_24h', 'failed');
@@ -79,9 +91,11 @@ describe('getWebinarJourneyStats', () => {
 
     expect(stats).toEqual({
       picker_opens: 2,
-      registrations: 2,
+      registrations: 1,
       viewers: 1,
-      form_submissions: 2,
+      form_submissions: 1,
+      entry_tag_friends: null,
+      invite_tag_friends: null,
       followups: {
         after_30m: { pending: 0, sent: 1, failed: 0 },
         after_24h: { pending: 0, sent: 0, failed: 1 },
@@ -94,5 +108,25 @@ describe('getWebinarJourneyStats', () => {
         archive_closing: { pending: 0, sent: 1, failed: 0, skipped: 0 },
       },
     });
+  });
+
+  it('設定したタグは同じ account_id の friend だけを DISTINCT で数える', async () => {
+    sqlite
+      .prepare(
+        `UPDATE webinars
+            SET account_id = ?, funnel_entry_tag_id = ?, funnel_invite_tag_id = ?
+          WHERE id = ?`,
+      )
+      .run('account-1', 'tag-entry', 'tag-invite', 'webinar-1');
+    sqlite.prepare('INSERT INTO friends VALUES (?, ?)').run('friend-other-account', 'account-2');
+    sqlite.prepare('INSERT INTO friend_tags VALUES (?, ?)').run('friend-1', 'tag-entry');
+    sqlite.prepare('INSERT INTO friend_tags VALUES (?, ?)').run('friend-other-account', 'tag-entry');
+    sqlite.prepare('INSERT INTO friend_tags VALUES (?, ?)').run('friend-2', 'tag-invite');
+    sqlite.prepare('INSERT INTO friend_tags VALUES (?, ?)').run('friend-other-account', 'tag-invite');
+
+    const stats = await getWebinarJourneyStats(asD1(sqlite), 'webinar-1');
+
+    expect(stats.entry_tag_friends).toBe(1);
+    expect(stats.invite_tag_friends).toBe(1);
   });
 });

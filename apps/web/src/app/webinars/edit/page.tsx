@@ -45,6 +45,8 @@ type WebinarJourneyFollowupStatusCounts = WebinarJourneyStatusCounts & {
 }
 
 type WebinarJourneyAnalytics = {
+  entryTagFriends?: number | null
+  inviteTagFriends?: number | null
   pickerOpens: number
   registrations: number
   viewers: number
@@ -239,6 +241,10 @@ function percent(value: number, total: number): string {
   return total > 0 ? `${Math.round((value / total) * 100)}%` : '—'
 }
 
+function journeyConversionRate(value: number, previous: number): string {
+  return `${((value / previous) * 100).toFixed(1)}%`
+}
+
 function compactDateTime(value: string): string {
   return new Date(value).toLocaleString('ja-JP', {
     month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -317,11 +323,17 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
   ]
   const maxFormFunnel = Math.max(1, ...formFunnelStages.map((stage) => stage.value))
   const journeyStages = journey === null ? [] : [
+    journey.entryTagFriends == null
+      ? null
+      : { label: '特典請求', value: journey.entryTagFriends, dot: 'bg-amber-500' },
+    journey.inviteTagFriends == null
+      ? null
+      : { label: 'ウェビナー案内クリック', value: journey.inviteTagFriends, dot: 'bg-orange-500' },
     { label: 'ピッカー表示', value: journey.pickerOpens, dot: 'bg-slate-500' },
     { label: 'ウェビナー予約', value: journey.registrations, dot: 'bg-blue-500' },
     { label: '視聴開始', value: journey.viewers, dot: 'bg-cyan-500' },
     { label: 'フォーム送信', value: journey.formSubmissions, dot: 'bg-emerald-500' },
-  ]
+  ].filter((stage): stage is { label: string; value: number; dot: string } => stage !== null)
   const followupStatuses = [
     { key: 'pending', label: '待ち' },
     { key: 'sent', label: '送信済み' },
@@ -501,7 +513,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h3 className="font-bold text-slate-900">オートウェビナー導線の段別カウント</h3>
-            <p className="mt-1 text-xs text-slate-500">全期間の記録。黄色の 0 件は、その段にまだ到達していません。</p>
+            <p className="mt-1 text-xs text-slate-500">全期間の記録。黄色の 0 人は、その段にまだ到達していません。</p>
           </div>
           {failedFollowupCount > 0 && (
             <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700">
@@ -510,20 +522,28 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
           )}
         </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
-          {journeyStages.map((stage) => {
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          {journeyStages.map((stage, index) => {
             const isEmpty = stage.value === 0
+            const previous = index > 0 ? journeyStages[index - 1].value : 0
             return (
               <div
                 key={stage.label}
                 className={`rounded-xl border p-3 ${isEmpty ? 'border-amber-200 bg-amber-50' : 'border-slate-100 bg-slate-50'}`}
               >
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                  <span className={`h-2 w-2 rounded-full ${stage.dot}`} />
-                  {stage.label}
+                <div className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-600">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${stage.dot}`} />
+                    {stage.label}
+                  </div>
+                  {index > 0 && previous > 0 && (
+                    <span className="shrink-0 text-[11px] font-medium text-slate-400">
+                      {journeyConversionRate(stage.value, previous)}
+                    </span>
+                  )}
                 </div>
                 <div className={`mt-2 text-2xl font-bold ${isEmpty ? 'text-amber-700' : 'text-slate-950'}`}>
-                  {stage.value.toLocaleString('ja-JP')}件
+                  {stage.value.toLocaleString('ja-JP')}人
                 </div>
                 {isEmpty && <div className="mt-1 text-[11px] font-medium text-amber-700">未到達</div>}
               </div>
