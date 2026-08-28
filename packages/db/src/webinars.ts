@@ -131,6 +131,7 @@ export interface WebinarFollowupConfig {
 export interface WebinarFollowupConfigPatch {
   isActive?: boolean;
   stageEnabledAt?: string | null;
+  noShowDelayMinutes?: number;
   bookingUrl?: string | null;
   bookingMenuId?: string | null;
   adminNotifyLineUserId?: string | null;
@@ -203,13 +204,14 @@ export async function upsertWebinarFollowupConfig(
             stage_enabled_at, picker_delay_minutes, no_show_delay_minutes,
             booking_delay_minutes, booking_second_delay_minutes, booking_menu_id, booking_url,
             admin_notify_line_user_id)
-         VALUES (?, ?, 30, 1440, ?, ?, 30, 30, 30, 1440, ?, ?, ?)`,
+         VALUES (?, ?, 30, 1440, ?, ?, 30, ?, 30, 1440, ?, ?, ?)`,
       )
       .bind(
         webinarId,
         now,
         patch.isActive === true ? 1 : 0,
         patch.stageEnabledAt ?? null,
+        patch.noShowDelayMinutes ?? 30,
         patch.bookingMenuId ?? null,
         patch.bookingUrl ?? null,
         patch.adminNotifyLineUserId ?? null,
@@ -225,6 +227,10 @@ export async function upsertWebinarFollowupConfig(
     if (patch.stageEnabledAt !== undefined) {
       sets.push('stage_enabled_at = ?');
       values.push(patch.stageEnabledAt);
+    }
+    if (patch.noShowDelayMinutes !== undefined) {
+      sets.push('no_show_delay_minutes = ?');
+      values.push(patch.noShowDelayMinutes);
     }
     if (patch.bookingUrl !== undefined) {
       sets.push('booking_url = ?');
