@@ -67,6 +67,8 @@ describe('getWebinarJourneyStats', () => {
         ('journey-1', 'webinar-1', 'picker_no_registration', 'pending');
       INSERT INTO webinar_journey_followups VALUES
         ('journey-2', 'webinar-1', 'submitted_no_booking_24h', 'skipped');
+      INSERT INTO webinar_journey_followups VALUES
+        ('journey-3', 'webinar-1', 'archive_closing', 'sent');
     `);
   });
 
@@ -89,6 +91,7 @@ describe('getWebinarJourneyStats', () => {
         registered_no_show: { pending: 0, sent: 0, failed: 0, skipped: 0 },
         submitted_no_booking_30m: { pending: 0, sent: 0, failed: 0, skipped: 0 },
         submitted_no_booking_24h: { pending: 0, sent: 0, failed: 0, skipped: 1 },
+        archive_closing: { pending: 0, sent: 1, failed: 0, skipped: 0 },
       },
     });
   });

@@ -1087,7 +1087,7 @@ CREATE TABLE IF NOT EXISTS webinar_funnel_events (
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS webinar_journey_followups (
+CREATE TABLE IF NOT EXISTS "webinar_journey_followups" (
   id          TEXT PRIMARY KEY,
   webinar_id  TEXT NOT NULL REFERENCES webinars(id) ON DELETE CASCADE,
   friend_id   TEXT NOT NULL REFERENCES friends(id) ON DELETE CASCADE,
@@ -1095,7 +1095,8 @@ CREATE TABLE IF NOT EXISTS webinar_journey_followups (
     'picker_no_registration',
     'registered_no_show',
     'submitted_no_booking_30m',
-    'submitted_no_booking_24h'
+    'submitted_no_booking_24h',
+    'archive_closing'
   )),
   retry_key   TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'pending'

@@ -28,6 +28,8 @@ const dbMocks = {
   getWebinarDailyStats: vi.fn(),
   getWebinarFormFunnelStats: vi.fn(),
   getWebinarJourneyStats: vi.fn(),
+  getWebinarFollowupConfig: vi.fn(),
+  upsertWebinarFollowupConfig: vi.fn(),
   getFriendByLineUserId: vi.fn(),
   getFriendByLineUserIdForAccount: vi.fn(),
   getFriendById: vi.fn(),
@@ -39,6 +41,7 @@ const dbMocks = {
   applyMileageRulesForEvent: vi.fn(),
   getDueWebinarRegistrations: vi.fn(),
   markWebinarRegistrationNotified: vi.fn(),
+  jstNow: vi.fn(() => '2026-08-10T20:00:00.000+09:00'),
 };
 vi.mock('@line-crm/db', () => dbMocks);
 
@@ -85,6 +88,24 @@ function makeWebinar(over: Record<string, unknown> = {}) {
     tag_on_cta_click: null,
     created_at: 'x',
     updated_at: 'x',
+    ...over,
+  };
+}
+
+function makeFollowupConfig(over: Record<string, unknown> = {}) {
+  return {
+    webinar_id: 'w1',
+    enabled_at: '2026-08-01T00:00:00.000+09:00',
+    first_delay_minutes: 30,
+    second_delay_minutes: 1440,
+    is_active: 1,
+    stage_enabled_at: '2026-08-01T00:00:00.000+09:00',
+    picker_delay_minutes: 30,
+    no_show_delay_minutes: 30,
+    booking_delay_minutes: 30,
+    booking_second_delay_minutes: 1440,
+    booking_menu_id: 'menu-old',
+    booking_url: 'https://example.com/old-booking',
     ...over,
   };
 }
@@ -146,6 +167,7 @@ beforeEach(() => {
       registered_no_show: { pending: 0, sent: 0, failed: 0, skipped: 0 },
       submitted_no_booking_30m: { pending: 0, sent: 0, failed: 0, skipped: 0 },
       submitted_no_booking_24h: { pending: 0, sent: 0, failed: 0, skipped: 0 },
+      archive_closing: { pending: 0, sent: 0, failed: 0, skipped: 0 },
     },
   });
   dbMocks.getUpcomingWebinarRegistration.mockResolvedValue(null);
@@ -1180,6 +1202,78 @@ describe('admin CRUD', () => {
     expect(dbMocks.replaceWebinarComments).not.toHaveBeenCalled();
   });
 
+  test('GET /api/webinars/:id/followup-config — 行が無ければ data: null', async () => {
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    dbMocks.getWebinarFollowupConfig.mockResolvedValue(null);
+    const res = await req('/api/webinars/w1/followup-config');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, data: null });
+  });
+
+  test('PUT /api/webinars/:id/followup-config — isActive と stageEnabledAt: now を同時に更新する', async () => {
+    const now = '2026-08-28T12:34:56.000+09:00';
+    dbMocks.jstNow.mockReturnValue(now);
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    const updated = makeFollowupConfig({
+      is_active: 1,
+      stage_enabled_at: now,
+      booking_menu_id: 'menu-new',
+      booking_url: 'https://example.com/new-booking',
+    });
+    dbMocks.upsertWebinarFollowupConfig.mockResolvedValue(updated);
+    const res = await reqAsStaff('/api/webinars/w1/followup-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        isActive: true,
+        stageEnabledAt: 'now',
+        bookingUrl: 'https://example.com/new-booking',
+        bookingMenuId: 'menu-new',
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(dbMocks.upsertWebinarFollowupConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      'w1',
+      {
+        isActive: true,
+        stageEnabledAt: now,
+        bookingUrl: 'https://example.com/new-booking',
+        bookingMenuId: 'menu-new',
+      },
+    );
+    expect(await res.json()).toMatchObject({
+      success: true,
+      data: {
+        webinarId: 'w1',
+        isActive: true,
+        stageEnabledAt: now,
+        bookingMenuId: 'menu-new',
+        bookingUrl: 'https://example.com/new-booking',
+      },
+    });
+  });
+
+  test('PUT /api/webinars/:id/followup-config — isActive: true で stageEnabledAt を省略しても now にする', async () => {
+    const now = '2026-08-28T12:34:56.000+09:00';
+    dbMocks.jstNow.mockReturnValue(now);
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    dbMocks.upsertWebinarFollowupConfig.mockResolvedValue(makeFollowupConfig({
+      stage_enabled_at: now,
+    }));
+    const res = await reqAsStaff('/api/webinars/w1/followup-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(dbMocks.upsertWebinarFollowupConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      'w1',
+      { isActive: true, stageEnabledAt: now },
+    );
+  });
+
   test('GET /api/webinars/:id/analytics — summary + trend + participants', async () => {
     dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
     dbMocks.getWebinarSessionStats.mockResolvedValue([
@@ -1239,6 +1333,7 @@ describe('admin CRUD', () => {
         registered_no_show: { pending: 1, sent: 2, failed: 0, skipped: 3 },
         submitted_no_booking_30m: { pending: 2, sent: 1, failed: 1, skipped: 0 },
         submitted_no_booking_24h: { pending: 1, sent: 0, failed: 0, skipped: 0 },
+        archive_closing: { pending: 0, sent: 0, failed: 0, skipped: 0 },
       },
     });
     const res = await req('/api/webinars/w1/analytics');
@@ -1301,6 +1396,7 @@ describe('admin CRUD', () => {
         registered_no_show: { pending: 1, sent: 2, failed: 0, skipped: 3 },
         submitted_no_booking_30m: { pending: 2, sent: 1, failed: 1, skipped: 0 },
         submitted_no_booking_24h: { pending: 1, sent: 0, failed: 0, skipped: 0 },
+        archive_closing: { pending: 0, sent: 0, failed: 0, skipped: 0 },
       },
     });
   });

@@ -810,6 +810,41 @@ const spec = {
       },
       delete: { tags: ['Webinars'], summary: 'ウェビナー削除', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Deleted' } } },
     },
+    '/api/webinars/{id}/followup-config': {
+      get: {
+        tags: ['Webinars'],
+        summary: 'ウェビナー追客設定取得',
+        description: '追客設定が未作成の場合は `data: null` を返す。',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Follow-up configuration or null' }, '404': { description: 'Webinar not found' } },
+      },
+      put: {
+        tags: ['Webinars'],
+        summary: 'ウェビナー追客設定の部分更新',
+        description:
+          '`isActive`、`stageEnabledAt`、`bookingUrl`、`bookingMenuId` を部分更新する。' +
+          '`stageEnabledAt` は ISO 8601 文字列または `"now"`。`isActive:true` と同時に省略すると現在時刻を設定する。',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                minProperties: 1,
+                properties: {
+                  isActive: { type: 'boolean' },
+                  stageEnabledAt: { type: 'string', description: 'ISO 8601 または `now`' },
+                  bookingUrl: { type: 'string', nullable: true },
+                  bookingMenuId: { type: 'string', nullable: true },
+                },
+              },
+            },
+          },
+        },
+        responses: { '200': { description: 'Updated configuration' }, '400': { description: 'Invalid patch' }, '404': { description: 'Webinar not found' } },
+      },
+    },
     '/api/webinars/{id}/assets/{revision}/{path}': {
       put: {
         tags: ['Webinars'],
