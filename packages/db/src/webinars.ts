@@ -990,22 +990,36 @@ export interface WebinarRegistration {
  * 予約を upsert する (同一 friend×セッションは冪等)。
  * 新規作成時だけ true。重複リクエストでは false を返し、呼び出し元が
  * 受付確認を二重送信しないために使う。
+ * 同じ webinar×friend の未来の別回は、選び直した時点で削除して1件に保つ。
+ * 対象の回そのものは削除条件から外してあるので、同一回の再予約では
+ * INSERT が 0 件になり false が返る (受付確認の二重送信を防ぐ)。
  */
 export async function upsertWebinarRegistration(
   db: D1Database,
   webinarId: string,
   friendId: string,
   sessionStartAt: number,
+  nowEpochSeconds: number,
 ): Promise<boolean> {
-  const result = await db
-    .prepare(
-      `INSERT OR IGNORE INTO webinar_registrations
-         (id, webinar_id, friend_id, session_start_at, notified_at, created_at)
-       VALUES (?, ?, ?, ?, NULL, ?)`,
-    )
-    .bind(crypto.randomUUID(), webinarId, friendId, sessionStartAt, jstNow())
-    .run();
-  return (result.meta?.changes ?? 0) > 0;
+  const [, inserted] = await db.batch([
+    db
+      .prepare(
+        `DELETE FROM webinar_registrations
+         WHERE webinar_id = ?
+           AND friend_id = ?
+           AND session_start_at > ?
+           AND session_start_at <> ?`,
+      )
+      .bind(webinarId, friendId, nowEpochSeconds, sessionStartAt),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO webinar_registrations
+           (id, webinar_id, friend_id, session_start_at, notified_at, created_at)
+         VALUES (?, ?, ?, ?, NULL, ?)`,
+      )
+      .bind(crypto.randomUUID(), webinarId, friendId, sessionStartAt, jstNow()),
+  ]);
+  return (inserted.meta?.changes ?? 0) > 0;
 }
 
 /** friend の未来セッション予約 (直近1件) */

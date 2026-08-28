@@ -919,6 +919,7 @@ describe('POST /api/liff/webinars/:slug/register', () => {
     expect(res.status).toBe(200);
     expect(dbMocks.upsertWebinarRegistration).toHaveBeenCalledWith(
       expect.anything(), 'w1', 'friend-1', SESSION_START,
+      SESSION_START - REGISTRATION_LEAD_SECONDS,
     );
   });
 
