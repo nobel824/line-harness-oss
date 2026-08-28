@@ -703,6 +703,7 @@ webinarRoutes.post('/api/liff/webinars/:slug/consultation-book', async (c) => {
         oauthClientId: c.env.GOOGLE_OAUTH_CLIENT_ID,
         oauthClientSecret: c.env.GOOGLE_OAUTH_CLIENT_SECRET,
       },
+      adminNotifyLineUserId: c.env.ADMIN_NOTIFY_LINE_USER_ID,
       proxyBaseUrl: new URL(c.req.url).origin,
       proxyDispatch: (request) => dispatchLineProxyLocally(request, c.env, c.executionCtx),
     });
