@@ -1,6 +1,6 @@
 {
   "name": "create-line-harness",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Set up L Harness — AI-operated LINE CRM — with one command",
   "type": "module",
   "bin": {
