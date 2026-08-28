@@ -1,6 +1,6 @@
 # state — 特典→オートウェビナー→無料相談 自動導線
 
-最終更新: 2026-08-28 / フェーズ: **本体追従・F-10・F-13 完了。F-11 だけ残り**
+最終更新: 2026-08-28 / フェーズ: **本体追従・F-10・F-12・F-13 完了。F-11 は PR #51 まで（ゲート待ち）**
 
 ---
 
@@ -30,15 +30,31 @@
 
 ## 3. 次の一手
 
-### F-11 `archive_closing`（唯一の残り・**危険 zone**）
+### ① PR #51（F-11 `archive_closing`）のゲートとマージ
 
-要件書の「F-11」節 + 「§4 配信本文（実文）」+ 「§5 文言の線」が正本。AC-11-1〜11-10。
+**実装は完成して全 green**（worker 1376 / db 193 tests）。**未実施なのは fresh Opus max のゲート1発だけ**
+（要件書 DoD・危険 zone のため）。通したらマージしてよい。
 
-**実装に含めること（要件書には無いが運用に必須）**: `GET` / `PUT /api/webinars/:id/followup-config`。
-**`webinar_followup_configs` を書き込む経路が API にも管理画面にも存在しない**ので、
-「`is_active` を立てる前に `stage_enabled_at` を今にする」が実行できず、
-**有効化した瞬間に過去の予約者へバースト送信**される。D1 直も、手元の Cloudflare API トークンに
-D1 権限が無く叩けなかった（2026-08-28 実測）。
+**マージ後の有効化は順序を守ること**:
+1. `PUT /api/webinars/:id/followup-config` で **`stageEnabledAt` を今にする**
+2. そのうえで `isActive` を立てる
+3. `wrangler tail` で cron の `cpuTime` が伸びていないか確認（候補SQLを1本増やしたため）
+
+**次回の自動同期は migration 075 の `DROP TABLE` でいったん止まる。** `update-from-upstream.yml` の
+破壊的操作ゲートが拾うためで、**設計どおりの挙動**。draft PR が立ったら #51 を根拠に通す。
+**検査スクリプトは緩めていない**（委譲先が `check-migrations.ts` に例外を足そうとしたのを差し戻した。
+upstream 所有なので触ると同期で衝突を自作するうえ、そもそも `release.yml` でしか走らず不要だった）。
+
+### ② 運営者通知の通知先を DB に移す（未着手・プロンプト用意済み）
+
+**現状の `ADMIN_NOTIFY_LINE_USER_ID`（環境変数）方式では値を設定できない。**
+Cloudflare ダッシュボードで設定した変数は**次のデプロイで消える**（デプロイは
+`wrangler deploy --config dist/line_harness/wrangler.json` で config が権威）。
+config に焼き込むには `deploy-cloudflare-worker.yml` を変える必要があるが、**upstream 所有なので触らない**。
+
+→ **`webinar_followup_configs` に `admin_notify_line_user_id` を additive に足し、
+解決順を「DB → 環境変数 → 未設定なら送らない」にする。** 環境変数は後方互換で残す。
+委譲プロンプトは書いてある（前セッションの scratchpad。無ければ上の説明から再生成できる）。
 
 ## 4. ユーザーにしかできないこと
 
