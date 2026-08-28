@@ -59,7 +59,9 @@ function fakeDb(options: DbOptions = {}): D1Database {
           return { ends_at: '2026-08-20T01:15:00.000Z', external_event_id: 'event-existing' };
         }
         if (sql.includes('SELECT f.line_user_id')) {
-          return { line_user_id: 'U123', channel_access_token: 'line-token' };
+          return {
+            line_user_id: 'U123', display_name: '予約者', channel_access_token: 'line-token',
+          };
         }
         return null;
       }),
@@ -152,6 +154,55 @@ describe('bookWebinarConsultation', () => {
       expect.arrayContaining([expect.objectContaining({ type: 'text' })]),
       expect.any(String), undefined,
     );
+  });
+
+  test('運営者通知先未設定なら運営者向けpushを送らない', async () => {
+    const db = fakeDb();
+    await bookWebinarConsultation(db, {
+      ...base,
+      startsAt: '2026-08-20T01:00:00.000Z',
+      proxyBaseUrl: 'https://worker.example.com',
+    });
+
+    expect(mocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
+    expect(mocks.pushViaHarnessProxy.mock.calls[0][2]).toBe('U123');
+  });
+
+  test('運営者通知先設定時は運営者へJST日時とMeet URLを1回通知する', async () => {
+    const db = fakeDb();
+    const result = await bookWebinarConsultation(db, {
+      ...base,
+      startsAt: '2026-08-20T01:00:00.000Z',
+      proxyBaseUrl: 'https://worker.example.com',
+      adminNotifyLineUserId: 'UADMIN',
+    });
+
+    expect(mocks.pushViaHarnessProxy).toHaveBeenCalledTimes(2);
+    const adminCall = mocks.pushViaHarnessProxy.mock.calls.find((call) => call[2] === 'UADMIN');
+    expect(adminCall).toBeDefined();
+    const adminText = (adminCall![3] as Array<{ text: string }>)[0].text;
+    expect(adminText).toContain('日時: 8月20日(木) 10:00');
+    expect(adminText).toContain('Meet: https://meet.google.com/abc-defg-hij');
+    expect(adminText).toContain('お名前: 予約者');
+    expect(adminCall![4]).toBe(`${result.bookingId}:admin`);
+  });
+
+  test('運営者向けLINE通知が失敗しても予約確定と予約者通知を維持する', async () => {
+    mocks.pushViaHarnessProxy.mockImplementation(async (_baseUrl, _token, to) => {
+      if (to === 'UADMIN') throw new Error('admin LINE unavailable');
+    });
+    const db = fakeDb();
+
+    await expect(bookWebinarConsultation(db, {
+      ...base,
+      startsAt: '2026-08-20T01:00:00.000Z',
+      proxyBaseUrl: 'https://worker.example.com',
+      adminNotifyLineUserId: 'UADMIN',
+    })).resolves.toMatchObject({ status: 'confirmed', created: true });
+
+    expect(mocks.pushViaHarnessProxy).toHaveBeenCalledTimes(2);
+    expect(mocks.pushViaHarnessProxy.mock.calls.some((call) => call[2] === 'U123')).toBe(true);
+    expect(mocks.pushViaHarnessProxy.mock.calls.some((call) => call[2] === 'UADMIN')).toBe(true);
   });
 
   test('Googleカレンダー未接続なら内部予約を作らない', async () => {

@@ -116,6 +116,7 @@ export type Env = {
     // of the worker still type-checks in test environments that don't set
     // them; the /admin/update/* route guards on their presence at runtime.
     ADMIN_API_KEY?: string;
+    ADMIN_NOTIFY_LINE_USER_ID?: string;
     CF_API_TOKEN?: string;
     CF_ACCOUNT_ID?: string;
     WORKER_NAME?: string;

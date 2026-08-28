@@ -1,3 +1,4 @@
+import { toJstString } from '@line-crm/db';
 import { getAvailability } from './availability.js';
 import {
   getStaffCalendarConnection,
@@ -253,6 +254,30 @@ function renderConfirmationText(startsAt: string, meetUrl: string): string {
     `\n\n前日と開始1時間前にも、このLINEへ参加リンクをお送りします。`;
 }
 
+function formatAdminNotificationDateTime(startsAt: string): string {
+  const date = new Date(startsAt);
+  const jst = new Date(date.getTime() + JST_OFFSET_MS);
+  const jstString = toJstString(date);
+  const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+  return `${Number(jstString.slice(5, 7))}月${Number(jstString.slice(8, 10))}日` +
+    `(${weekdays[jst.getUTCDay()]}) ${jstString.slice(11, 16)}`;
+}
+
+function renderAdminNotificationText(
+  startsAt: string,
+  meetUrl: string,
+  displayName: string | null,
+): string {
+  const lines = [
+    '無料相談の予約が入りました。',
+    '',
+    `日時: ${formatAdminNotificationDateTime(startsAt)}`,
+  ];
+  if (displayName) lines.push(`お名前: ${displayName}`);
+  lines.push(`Meet: ${meetUrl}`);
+  return lines.join('\n');
+}
+
 export async function bookWebinarConsultation(
   db: D1Database,
   input: {
@@ -264,6 +289,7 @@ export async function bookWebinarConsultation(
     now: Date;
     credentials: GoogleCalendarCredentials;
     proxyBaseUrl: string;
+    adminNotifyLineUserId?: string;
     proxyDispatch?: HarnessProxyDispatch;
   },
 ): Promise<BookedWebinarConsultation> {
@@ -405,16 +431,25 @@ export async function bookWebinarConsultation(
 
   // LINE通知は予約・Google Meet作成の成否とは分離する。一時的なLINE障害で
   // 確定済みイベントまで取り消さず、リマインドの正規レコードも維持する。
+  let recipient: {
+    line_user_id: string;
+    display_name: string | null;
+    channel_access_token: string;
+  } | null = null;
   try {
-    const recipient = await db
+    recipient = await db
       .prepare(
-        `SELECT f.line_user_id, la.channel_access_token
+        `SELECT f.line_user_id, f.display_name, la.channel_access_token
            FROM friends f
            INNER JOIN line_accounts la ON la.id = f.line_account_id
           WHERE f.id = ? AND f.is_following = 1 AND la.is_active = 1`,
       )
       .bind(input.friendId)
-      .first<{ line_user_id: string; channel_access_token: string }>();
+      .first<{
+        line_user_id: string;
+        display_name: string | null;
+        channel_access_token: string;
+      }>();
     if (recipient) {
       await pushViaHarnessProxy(
         input.proxyBaseUrl,
@@ -427,6 +462,28 @@ export async function bookWebinarConsultation(
     }
   } catch (error) {
     console.error('webinar consultation confirmation LINE failed:', error);
+  }
+
+  try {
+    if (recipient && input.adminNotifyLineUserId) {
+      await pushViaHarnessProxy(
+        input.proxyBaseUrl,
+        recipient.channel_access_token,
+        input.adminNotifyLineUserId,
+        [{
+          type: 'text',
+          text: renderAdminNotificationText(
+            startsAt.toISOString(),
+            meetUrl!,
+            recipient.display_name,
+          ),
+        }],
+        `${bookingId}:admin`,
+        input.proxyDispatch,
+      );
+    }
+  } catch (error) {
+    console.error('webinar consultation admin LINE failed:', error);
   }
 
   return {
