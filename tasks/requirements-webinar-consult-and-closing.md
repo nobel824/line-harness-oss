@@ -1,14 +1,25 @@
-# 要件定義書 v2｜案内の再送時刻（F-9）＋ セッション選択の3日先送り（F-10）＋ アーカイブ期限リマインド（F-11）
+# 要件定義書 v3｜案内の再送時刻（F-9）＋ セッション選択の3日先送り（F-10）＋ アーカイブ期限リマインド（F-11）
 
-作成: 2026-08-28（v2） / 正本 `tasks/requirements-auto-webinar-funnel.md` の続き（F-1〜F-8 の続き番号）
+作成: 2026-08-28（v3） / 正本 `tasks/requirements-auto-webinar-funnel.md` の続き（F-1〜F-8 の続き番号）
 状態: **未着手**。設計判断の経緯は `tasks/state.md` の「2026-08-28 の決定」節が正本。
 
 > **v1 からの改訂点**（v1 全文は commit `3bf4f32`）
 > - **v1 の F-9「相談枠ピッカーの単体ページ `page=consult` を新設」は却下。** 前提が2つとも誤りだった（下記 §10-1）
 > - **C-1「案内を特典応答から外して翌日 push に移す」はユーザー決定で取り消し**（2026-08-28 夕方）。
 >   2バブル目の flex カードは応答メッセージ＝**0通**で配れているため残す。採用するのは **C-2（時刻 19:00）だけ**
-> - Grok spec レビューの致命1・重要12・軽微4を反映。テーブル名・CHECK 制約・UNIQUE キー・
+> - Grok spec レビュー（1回目）の致命1・重要12・軽微4を反映。テーブル名・CHECK 制約・UNIQUE キー・
 >   候補SQL の分岐位置・期待ステータスの誤りを訂正した
+>
+> **v3（2026-08-28・Grok spec レビュー2回目を反映。致命8・重要9を全件採用）**
+> 1. **閾値の `COALESCE(..., 0)` は除外側の式で、入口に転用すると意味が反転する** —— CTA 無しウェビナーで
+>    視聴者全員が (c) に落ち、`form_id` が無いので URL を組めない。3分岐を排他かつ網羅に書き直した
+> 2. **CTA クリックの除外は friend × ウェビナー単位**。session 単位だと `after_24h` と二重になる
+> 3. **入場リンクは `buildWebinarUrl`（session 付き）**。ピッカー URL では再生できない
+> 4. **F-10 は既存テストを壊すのが正しい** —— 「更新する3箇所」と「守る2箇所」を分けた
+> 5. **AC の検証コマンドが `.data` を通していなかった** —— 実装が正しくても fail する AC だった
+> 6. **`stage_enabled_at` の下限を候補SQLに入れる**（運用手順だけでは効かない）
+> 7. **migration は 075 から**（060 を書き換えても適用済み D1 は変わらない）＋ bootstrap 再生成
+> 8. **AC-11-8（migration 前の INSERT）を新設**。`getOrCreateJourneyFollowup` は送信ループの try の外にある
 
 ---
 
@@ -25,7 +36,7 @@
 | 予約したが未視聴 | `registered_no_show` | 配信終了30分後 |
 | 視聴したが CTA 前で離脱 | 同上（本文を出し分け） | 同上 |
 | **CTA まで見たが押していない** | **無風** | — |
-| CTA を押してフォーム未送信 | `after_30m` / `after_24h` | 30分後 / 翌日 |
+| CTA を押してフォーム未送信 | `after_30m` / `after_24h`（**別テーブル `webinar_followups`**） | 30分後 / 翌日 |
 | フォーム送信・予約未確定 | `submitted_no_booking_*` | 無効化中（`booking_url = NULL`） |
 
 **穴の正体**: `buildRegisteredNoShowText` は `lastPosition >= ctaAt` のとき **`null` を返して送らない**
@@ -71,7 +82,7 @@
 | P-7 | `kind` に **CHECK 制約**（既存4値のみ）。SQLite は CHECK を ALTER できない | `060_webinar_journey_followups.sql:37-42` |
 | P-8 | UNIQUE は **`(webinar_id, friend_id, kind)`**。session を含まない | 同 `:50` |
 | P-9 | 候補SQLは **ループ前に全部 await**。1本が throw すると その tick の追客が全滅 | `webinar-followups.ts:446-463` |
-| P-10 | 新規予約の成功ステータスは **201** | `routes/webinars.ts:707` / `webinars.test.ts:917` |
+| P-10 | `POST .../register` の成功は **200 `{ ok, sessionStartAt, created }`**（`routes/webinars.ts:543`）。201 は**相談枠の `consultation-book`**（`:707`）で別物 | 実コード |
 
 ## 3. 機能要件と受け入れ条件
 
@@ -83,8 +94,11 @@
 
 - **AC-9-1**: When `GET /api/scenarios/5202064a` を叩いたとき, the system shall step 1 の
   `deliveryTime = "19:00"` / `offsetDays = 1` を返す
-  検証: `curl -sH "Authorization: Bearer $KEY" .../api/scenarios/5202064a | jq '.steps[0] | {offsetDays, deliveryTime}'`
+  検証: `curl -sH "Authorization: Bearer $KEY" .../api/scenarios/5202064a | jq '.data.steps[0] | {offsetDays, deliveryTime}'`
   → `{"offsetDays":1,"deliveryTime":"19:00"}`
+  **レスポンスは `{ success, data: { steps } }` で包まれている**（`routes/scenarios.ts:222-227`）。
+  `.steps[0]` と書くと**実装が正しくても null になって fail する**。AC-9-3 の `/api/auto-replies/:id` も同じ
+  （`routes/auto-replies.ts:154`）
 - **AC-9-2**: When 同じ step を見たとき, the system shall `conditionType = "tag_not_exists"` /
   `conditionValue = "d780e7e7-6335-49b3-9490-ddaa338b83bc"`（ウェビナー案内クリック）を**保ったまま**返す
   ＝ **C-4 は実行しない**。未クリック者限定を維持する
@@ -99,27 +113,34 @@
 
 **生成はサーバー1点** — `upcomingSessions`（`services/webinar-schedule.ts:116-126`）のフィルタ
 `s > nowEpochSeconds` を `s >= nowEpochSeconds + REGISTRATION_LEAD_SECONDS` に変える。
+**境界は `>=` を正とする**（ちょうど72時間後の回は出す）。テストの期待値もこれで固定し、
+実装とテストのどちらが仕様かで割れないようにする。
 
 - **AC-10-1**: When ピッカーが回の一覧を組み立てるとき, the system shall
-  **開いた時刻から72時間より後**に始まる回だけを返す
-  検証: `upcomingSessions` の**新規単体テスト**（現状ゼロ）。週5回20時のルールで `now = 月曜12:00` を与え、
-  返り値の先頭が **木曜20:00 以降**であること
+  **開いた時刻の72時間後ちょうど以降**に始まる回だけを返す
+  検証: `upcomingSessions` の**新規単体テスト**（現状ゼロ）。週5回20:00・`now = 月曜12:00` で先頭が木曜20:00。
+  **境界を2件置く**: ちょうど `now + 72h` の回は**含む** / その1秒手前は**含まない**
 - **AC-10-2**: When 3日以内の回の `sessionStartAt` を `POST /api/liff/webinars/:slug/register` に渡したとき,
-  the system shall **400 `invalid_session`** を返す（`routes/webinars.ts:510-518` が同じ配列で受理判定するため、
-  自動的にそうなる。**意図どおりであることをテストで固定する**）
+  the system shall **400 `invalid_session`** を返す。
+  **ただし開始5分以内の「現在回」は例外**で、これまでどおり受理する
+  → `currentIsBookable` が `upcoming.includes` の**前段**にある（`routes/webinars.ts:511-518`・猶予定数 `:78`）。
+  **「3日以内なら常に400」とテストを書くと、正しい実装が fail する**
 - **AC-10-3**: When 週5回（月・水・金・土・日 20:00）の設定でピッカーを開いたとき, the system shall
   **最低5件**の回を返す
-  → `LOOKAHEAD_DAYS = 8` のままだと 3日切り捨て後に**5日分しか残らない**。
-  **`LOOKAHEAD_DAYS` を 11 に延ばす**（8 + 3）。定数の意味が「先読み日数」なので、
-  リード日数を足した値にする理由をコメントに残す
+  → `LOOKAHEAD_DAYS = 8` のままだと3日切り捨て後に**5日分しか残らない**。**11 に延ばす**（8 + 3）。
+  コメントの更新対象は `webinar-schedule.ts:6` と `:66`（「未来 8 日」）の**両方**
 - **AC-10-4**: When 予約済みの利用者が画面を開き、かつ選べる回が0件だったとき, the system shall
   **予約済みカードを表示する**（待機画面に落とさない）
-  → 現状の分岐条件は `!state.live && (state.upcoming?.length ?? 0) > 0`（`client/webinar/main.tsx:796`）。
+  → 分岐条件は `!state.live && (state.upcoming?.length ?? 0) > 0`（`client/webinar/main.tsx:797`。796 はコメント行）。
   **`… || state.registeredSessionAt !== null` を足す**。あわせて枠リストが空のときの見た目を決める
   （予約済みカードだけを出し、「選べる回はまだありません」を添える）
-- **AC-10-5**: When 入場リンクから視聴するとき / アーカイブを再生するとき, the system shall
-  **これまでどおり再生できる**（`upcomingSessions` を通らない経路）。
-  検証: `routes/webinars.test.ts` の既存テスト（`256,273,301,392,421`）が green のまま
+- **AC-10-5**: 既存テストは **「更新するもの」と「守るもの」を分ける**。
+  **更新する**（仕様変更なので落ちるのが正しい・落ちなければ F-10 が効いていない）:
+  `routes/webinars.test.ts:392` / `:421`（開始1時間前・10分前のピッカーが `upcoming: [SESSION_START]` を期待）、
+  `:848-858`（開始1時間前の register が 200 を期待。AC-10-2 で 400 になる）。
+  スケジュールは once 1本（`:68-80`）なので、**リード日数を跨ぐ固定値に作り替える**。
+  **守る**（F-10 の影響を受けない・green のままでなければ回帰）:
+  `:306` / `:328`（`replay: true` + `playlistUrl` のアーカイブ再生）
 - **AC-10-6**: When 開始5分以内の「現在回」があるとき, the system shall
   **これまでどおりそれを返す**（`webinars.ts:325-327` の別経路。3日フィルタの外）
 
@@ -137,62 +158,87 @@
 （`2026-0803-send-time-optimum-is-refuted`・Braze が自社データで反証）`[観察]`。
 根拠は「今日で最後だと言えて、かつ夕方〜夜に57分を見返す時間が残る」という構造だけ。
 
-**母数（誰に送るか）**: 予約済み（`webinar_registrations` に行がある）かつ、
-**まだ相談に進んでいない人**。「進んでいない」の定義は下の3分岐で確定させる。
+#### 母数と3分岐（排他かつ網羅）
 
-**本文の3分岐**（`webinar_viewers.last_position_seconds` と `webinar_ctas` の `kind='form'` の
-最小 `at_seconds` で判定。**CTA 位置はハードコードしない**）:
+閾値 **T = そのウェビナーの form CTA の最小 `at_seconds`**（`webinar_ctas.kind='form'`）。**form CTA が無ければ T は NULL**。
+`pos = webinar_viewers.last_position_seconds`（`NOT NULL DEFAULT 0`）。
 
 | 分岐 | 条件 | 送るもの |
 |---|---|---|
-| **(a) 未視聴** | `webinar_viewers` に行が無い、または `last_position_seconds = 0` | 期限告知 ＋ 入場リンク ＋ **別の回を選び直す導線** |
-| **(b) 途中離脱** | `0 < last_position < COALESCE(MIN(cta.at_seconds), 0)` | 「終盤が残っています」＋ 期限 ＋ 入場リンク |
-| **(c) 完走・CTA未クリック** | `last_position >= COALESCE(MIN(cta.at_seconds), 0)` かつ `cta_clicked_at IS NULL` | **無料相談のリンクだけ**（`?page=form&id=<相談フォームID>`） |
+| **(a) 未視聴** | viewer 行が無い、**または** `pos = 0` | 期限告知 ＋ 入場リンク ＋ **別の回を選び直す導線** |
+| **(b) 途中離脱** | `pos > 0` **かつ**（`T IS NULL` **または** `pos < T`） | 「終盤が残っています」＋ 期限 ＋ 入場リンク |
+| **(c) 完走・CTA未クリック** | `T IS NOT NULL` **かつ** `pos >= T` **かつ** その friend × ウェビナーで `cta_clicked_at` が**1度も付いていない** | **無料相談のリンクだけ**（`?page=form&id=<form_id>`） |
 
-**除外**: `cta_clicked_at IS NOT NULL` の人は**送らない**。`after_30m` / `after_24h` の母数
-（`webinar-followups.ts:177`）と重なり、期限前にもう1通行くため。
+**閾値に `COALESCE(MIN(at_seconds), 0)` を使ってはいけない。** 既存の `COALESCE(..., 0)`
+（`webinar-followups.ts:298-304`）は **除外側**の式で、意味が逆。入口に転用すると CTA 無しのとき T=0 になり、
+**(b) が空集合・viewer 行がある人全員が (c) に落ちる**。しかも (c) は相談フォームの URL が必須なのに
+form CTA が無ければ `form_id` が無く、URL を組み立てられない。
+→ **form CTA が無いウェビナーでは (c) は成立しない**（視聴者は (b) に入る）。
 
-- **AC-11-1**: When 予約済み・未視聴の friend について送信時刻を過ぎたとき, the system shall
+**除外は friend × ウェビナー単位で見る。** `webinar_viewers.cta_clicked_at` は
+`(webinar_id, friend_id, session_start_at)` の行に付く（`packages/db/src/webinars.ts:304-317`）。
+**session 単位で除外を書くと**、1回目でCTAを押した人が2回目を予約して未視聴のとき (a) に入り、
+friend 単位で母数を取る `after_30m` / `after_24h`（`webinar-followups.ts:173-177`）と**二重になる**。
+
+**候補SQLに `form_id` を SELECT する。** (c) の URL は `formUrl` と同じ形だが、`JourneyCandidate`
+（`webinar-followups.ts:38-49`）は `form_id` を持たない（CTA 追客側の `candidates()` は `:183-185` で取っている）。
+足さないとハードコードか `booking_url` 流用に流れる。
+
+**`stage_enabled_at` の下限を候補SQLに入れる。** 既存の journey SQL は
+`datetime(r.created_at) >= datetime(COALESCE(cfg.stage_enabled_at, cfg.enabled_at))`（`:284`）を持つ。
+**この行をコピーしないと、有効化した瞬間に過去の予約者へバースト送信される。**
+§6 の運用手順（有効化前に `stage_enabled_at` を今にする）は、SQL が参照して初めて効く。
+
+#### 受け入れ条件
+
+- **AC-11-1**: When 予約済み・(a) の条件を満たす friend について送信時刻を過ぎたとき, the system shall
   `kind = 'archive_closing'` の行を `webinar_journey_followups` に1件だけ作り、(a) の本文を送る
-- **AC-11-2**: When 視聴位置が form CTA の `at_seconds` 未満の friend について送信時刻を過ぎたとき,
-  the system shall (b) の本文を送る
-- **AC-11-3**: When 視聴位置が form CTA 以上で、かつ `cta_clicked_at` が NULL の friend について
-  送信時刻を過ぎたとき, the system shall (c) の本文を送り、本文に
-  `https://liff.line.me/<liffId>/?page=form&id=<相談フォームID>&liffId=<liffId>` を含める
-- **AC-11-4**: When `cta_clicked_at` が NULL でない friend を評価したとき, the system shall
-  `archive_closing` の行を**作らない**
-- **AC-11-5**: When form CTA を持たないウェビナーを評価したとき, the system shall
-  **例外を投げず**、視聴済みの人を (c) ではなく (a)/(b) 側で扱う
-  → 閾値は `COALESCE(MIN(wc.at_seconds), 0)`。**`COALESCE` を落とすと `>= NULL` が NULL に評価されて
-  沈黙故障する**（2026-08-27 に1度踏んでいる）。SQL 文字列を縛るアサーションをテストに入れる
-  （モックだと SQL が壊れても green のため）
+- **AC-11-2**: When (b) の条件を満たす friend について送信時刻を過ぎたとき, the system shall (b) の本文を送る
+- **AC-11-3**: When (c) の条件を満たす friend について送信時刻を過ぎたとき, the system shall (c) の本文を送り、
+  本文に `https://liff.line.me/<liffId>/?page=form&id=<form_id>&liffId=<liffId>` を含める
+- **AC-11-4**: When その friend × ウェビナーで `cta_clicked_at` が1つでも非 NULL のとき, the system shall
+  session を問わず `archive_closing` の行を**作らない**
+- **AC-11-5**: When form CTA を持たないウェビナーを評価したとき, the system shall **例外を投げず**、
+  viewer 行がある人を **(b)** として扱い、**(c) を1件も作らない**
+  検証: form CTA 無しのフィクスチャで候補SQLを実行し、(c) 用の分岐が0件・(b) が該当件数であること。
+  **SQL 文字列に `COALESCE(MIN(...), 0)` が現れないこと**をアサーションで縛る（モックだと SQL が壊れても green のため）
 - **AC-11-6**: When 同じ friend × 同じウェビナーで2回目の予約をしたとき, the system shall
   `archive_closing` を**もう送らない**
-  → UNIQUE は `(webinar_id, friend_id, kind)` で **session を含まない**（P-8）。
-  **これは仕様として受け入れる**（1ウェビナーにつき生涯1回）。v1 の AC は「friend × webinar × session」と
-  書いていたが、そのままでは2回目の予約回で INSERT が弾かれて**1通も送れない**
+  → UNIQUE は `(webinar_id, friend_id, kind)` で session を含まない（P-8）。
+  **1ウェビナーにつき生涯1回**を仕様として受け入れる。v1 の AC は「friend × webinar × session」と書いていたが、
+  そのままでは2回目の予約回で INSERT が弾かれて**1通も送れない**
 - **AC-11-7**: When `archive_closing` の候補SQLが例外を投げたとき, the system shall
   **他の kind の追客を通常どおり送る**
-  → `journeyDue` は4本を順に await してスプレッド（`webinar-followups.ts:450-463`）＝
-  **1本 throw すると後続 kind が走らない**。候補取得を `Promise.allSettled` か個別 try/catch に変える
-- **AC-11-8**: When `GET /api/webinars/:id/analytics` を叩いたとき, the system shall
-  `journey` に `archive_closing` の件数を含める
-  → `isWebinarJourneyFollowupKind`（`packages/db/src/webinars.ts:447-453`）に足す。
-  **ここに無い kind は集計から黙って捨てられる**ので、0件と沈黙故障を区別できなくなる
-- **AC-11-9**: When 既存の4ステージ（`picker_no_registration` / `registered_no_show` /
-  `after_30m` / `after_24h`）の候補を評価したとき, the system shall **これまでと同じ母数**を返す
-  → 新 kind の専用分岐を **else の前**に置く。else は `submitted_no_booking_*`
-  （`webinar-followups.ts:341-390`）なので、専用 `if` が無いと母数が「フォーム送信済み・未予約」になり
-  **AC-11-1 の逆**になる
+  → `journeyDue` は4本を順に await して配列リテラルにまとめる（`webinar-followups.ts:450-463`）＝
+  **1本 throw すると配列が完成せず、先に取った候補も捨てられ、送信ループ（`:466` 以降）に入らない**。
+  `due`（`:446-448`）も同じブロックなので CTA 追客まで止まる。候補取得を `Promise.allSettled` か個別 try/catch にする
+- **AC-11-8**: When migration 適用前の DB で `archive_closing` を INSERT しようとしたとき, the system shall
+  **他の kind の送信を止めない**
+  → `getOrCreateJourneyFollowup`（`:393-422`）は送信ループの try（`:514`）の**外**にある。
+  CHECK 違反の throw がここで出ると後続 journey が止まる。**AC-11-7 だけでは塞げない**
+- **AC-11-9**: When `GET /api/webinars/:id/analytics` を叩いたとき, the system shall
+  `data.journey.journeyFollowups.archive_closing` に件数を返す
+  → 足す箇所は**5つ**。`WebinarJourneyFollowupKind`（`packages/db/src/webinars.ts:116-120` と worker 側 `:17-21`）/
+  `emptyWebinarJourneyFollowupCounts`（`:467-473`）/ `isWebinarJourneyFollowupKind`（`:447-453`）/
+  テスト mock（`webinars.test.ts:124-129`・`webinar-journey-stats.test.ts:87-92`）。
+  1つでも漏れると型が壊れるか 500 になるか、**0件と欠測を区別できない**（未知 kind は `:525-527` で黙って捨てられる）
+- **AC-11-10**: When 既存4ステージ（`picker_no_registration` / `registered_no_show` /
+  `submitted_no_booking_30m` / `submitted_no_booking_24h`）の候補を評価したとき, the system shall
+  **これまでと同じ母数**を返す
+  → **`after_30m` / `after_24h` は別テーブル `webinar_followups`** で、`candidates()`（`:165-211`）が取る。
+  journey 側の CHECK 4値と混同しない。新 kind の専用分岐を **else の前**に置く。
+  else は `cfg.booking_url IS NOT NULL`（`:368`）なので、専用 `if` を忘れると
+  「フォーム送信済みに誤配」ではなく **候補0件の沈黙**になる（`booking_url` は NULL のままのため）。
+  **回帰テストは「0件でないこと」を見る形にする**（0件で green になるテストでは沈黙を検出できない）
 
-**通数への影響（承知のうえ）**: 未視聴者は `registered_no_show`（配信終了30分後）と
-`archive_closing`（3日後）の**2通を受け取る**。ステージ排他ではない — 前者は「見逃し」、後者は「期限」で
-役割が違うため意図的に重ねる。1人あたり最大 **4通 → 5通**。
+**通数への影響（承知のうえ）**: (a) と (b) は `registered_no_show` の母数
+（除外は `pos >= COALESCE(MIN(cta), 0)`・`:298-304`）に**残る**ので、両方受け取る。
+除外されるのは (c) だけ。1人あたり最大 **4通 → 5通**。
 ブロック理由1位は「配信頻度が多すぎる」26.5%（モビルス・2025・n=655）`[実証]`。
 ただし同 atom の Baek et al. が示すのは、頻度を下げると**解約59%減・短期売上5〜8%減**という
 **トレードオフ**であって「送らない＝無料の安全策」ではないこと（メールの数値なので**構造だけ転用**）。
 **通数に正解は存在しない** `[実証・該当なしの確認]`（`2026-0803-no-public-data-on-step-completion`）。
-→ 段別カウントで測る（AC-11-8）。
+→ 段別カウントで測る（AC-11-9）。
 
 ## 4. 配信本文（実文）
 
@@ -241,6 +287,14 @@ tatsukiが45分、実際にあなたのXアカウントを見ながら、
 ※日程は、フォームを送信したあとその場で選べます。
 ```
 
+**`{入場リンク}` は session 付きの URL**（`buildWebinarUrl`・`services/webinar-reminders.ts:29-37`）。
+`?page=webinar&slug=…&sessionStartAt=<予約した回>&liffId=…` の形でなければアーカイブ再生に入れない
+（`routes/webinars.ts:176-200` が `sessionStartAt` 付きの予約行を要求する）。
+**`webinarPickerUrl`（`webinar-followups.ts:70-75`）は slug だけで session を持たないので、入場リンクには使えない。**
+送信時点で対象回は過去回なので、F-10 後の `upcoming` にも出ない ——
+**ピッカー URL を入場リンクに使うと、メッセージは届くのに再生できない。**
+`{ピッカーURL}`（(a) の「別の回を選び直す」導線）だけが `webinarPickerUrl`。
+
 **(c) に期限を書かない理由**: 閉じるのは**アーカイブのリンク**であって、相談枠ではない。
 完走した人にとって「今日で最後」なのは動画だけで、相談は明日でも申し込める。
 **実在しない期限を書けば嘘になる**（争点マップ §3-1「希少性・限定性の演出 × 景品表示法」——
@@ -269,32 +323,39 @@ tatsukiが45分、実際にあなたのXアカウントを見ながら、
 ## 6. 非機能要件・実装制約
 
 - **migration が要る**（`kind` の CHECK に `archive_closing` を足す）。SQLite は CHECK を ALTER できないので
-  **テーブル作り直し**。＝ **危険 zone**。追番は本体取り込みと衝突しないか採番前に確認する
+  **テーブル作り直し**。＝ **危険 zone**。
+  **既存の最新は `074_auto_reply_second_message.sql` なので採番は 075 から。**
+  `060_webinar_journey_followups.sql` を書き換えても**適用済み D1 の CHECK は変わらない**。
+  あわせて **`pnpm --dir packages/db generate:bootstrap` で bootstrap を再生成**する（`packages/db/package.json:18`）
 - **`is_active` を 0→1 に戻すと `stage_enabled_at` が古いままで過去の離脱者にバースト送信**（既知の罠）。
-  新ステージも同じ構造なので、**有効化前に `stage_enabled_at` を必ず今にする**
+  **有効化前に `stage_enabled_at` を必ず今にする**。加えて**候補SQL側にも下限フィルタを入れる**（F-11 §母数）
 - 期限の計算は `session_start_at + duration_seconds + ARCHIVE_WINDOW_SECONDS - 6h`。
   `ARCHIVE_WINDOW_DAYS` は定数から引く（**ハードコードしない**）
-- 相談フォームの URL は `formUrl`（`webinar-followups.ts:63-67`）を流用する。**未 export なので
-  同ファイル内に置くか export する**。liffId の解決順は ①ウェビナーの `account_id` → `line_accounts.liff_id`
-  ②`options.defaultLiffId` ③cron が `env.LIFF_URL` から抽出。**どちらも無いと throw**（`:484`）
-- 送信ループ側（`:511-575`）は候補ごと try/catch なので、止まるのは**候補取得の段階だけ**（AC-11-7）
-- 既存テストを壊さない: `apps/worker test` 102 files / 1054 tests・`packages/db test` 24 files / 168 tests
+- **入場リンクは `buildWebinarUrl`（session 付き）／ピッカーは `webinarPickerUrl`／相談フォームは `formUrl`** と使い分ける。
+  `formUrl`（`webinar-followups.ts:63-67`）は未 export なので同ファイル内に置くか export する。
+  liffId が解決できないときの throw は **CTA 側が `:484`、journey 側が `:524`** の2箇所
+- 送信ループ側（`:511-575`）は候補ごと try/catch なので、止まるのは**候補取得と `getOrCreateJourneyFollowup` の段**
+  （AC-11-7 / AC-11-8）
+- 既存テストを壊さない: `apps/worker test` 102 files / 1054 tests・`packages/db test` 24 files / 168 tests。
+  **ただし F-10 は仕様変更なので、AC-10-5 が名指しする3箇所は「更新する」対象**
 - **`packages/db` のテストは `test/` に置く**（vitest の include が `test/**` 限定。`src/*.test.ts` は走らない）
 
 ## 7. 失敗モードリスト（痛い順・テスト化の根拠）
 
 | # | 失敗モード | 痛み | 扱い |
 |---|---|---|---|
-| 1 | 新 kind の INSERT が CHECK で弾かれ、cron がその tick ごと落ちる | **全追客が停止** | migration ＋ AC-11-7 |
-| 2 | 候補SQLの throw で既存4ステージが送られなくなる | **全追客が停止** | AC-11-7（`allSettled`） |
-| 3 | 専用分岐を else の後に置き、母数が「フォーム送信済み・未予約」になる | **狙いと逆の人に送る** | AC-11-9 |
-| 4 | `COALESCE` 落ちで CTA 無しウェビナーが沈黙故障 | 誤配信 | AC-11-5（SQL 文字列アサーション） |
-| 5 | `stage_enabled_at` が古く、過去の離脱者に**バースト送信** | **通数枯渇＋ブロック** | §6 の運用手順 |
-| 6 | `now+3日` で upcoming が空になり、予約済みの人が待機画面に落ちる | 予約が消えたように見える | AC-10-4 |
-| 7 | `LOOKAHEAD_DAYS` 据え置きで選べる回が1〜2件に減る | 選べない | AC-10-3 |
-| 8 | `cta_clicked_at` 済みを除外し忘れ、`after_24h` と二重に届く | 通数の無駄・不信 | AC-11-4 |
-| 9 | 2回目の予約で UNIQUE に弾かれ、1通も送れない | 沈黙故障 | AC-11-6（仕様として明記） |
-| 10 | 段別カウントに kind を足し忘れ、0件と故障を区別できない | 計測不能 | AC-11-8 |
+| 1 | migration 前に新 kind を INSERT し、CHECK 違反が送信ループの外で throw する | **全追客が停止** | AC-11-8（AC-11-7 では塞げない） |
+| 2 | 候補SQLの throw で配列リテラルが完成せず、既存4ステージが送られない | **全追客が停止** | AC-11-7（`allSettled`） |
+| 3 | `stage_enabled_at` 下限を候補SQLに入れ忘れ、有効化直後に**バースト送信** | **通数枯渇＋ブロック** | F-11 §母数・§6 |
+| 4 | 閾値に `COALESCE(..., 0)` を使い、CTA 無しウェビナーで視聴者全員が (c) に落ちる | **URL が組めず throw、または誤配** | AC-11-5（SQL 文字列アサーション） |
+| 5 | 専用分岐を else の後に置き、候補が**0件で沈黙**する（else は `booking_url IS NOT NULL`） | 何も送られないのに気づけない | AC-11-10（「0件でないこと」を見る） |
+| 6 | 除外を session 単位で書き、CTA 済みの人に `after_24h` と二重に届く | 通数の無駄・不信 | AC-11-4（friend × ウェビナー単位） |
+| 7 | 入場リンクにピッカー URL を使い、**届くのに再生できない** | 一番濃い層を落とす | §4 の注記 |
+| 8 | `now+3日` で upcoming が空になり、予約済みの人が待機画面に落ちる | 予約が消えたように見える | AC-10-4 |
+| 9 | `LOOKAHEAD_DAYS` 据え置きで選べる回が1〜2件に減る | 選べない | AC-10-3 |
+| 10 | 2回目の予約で UNIQUE に弾かれ、1通も送れない | 沈黙故障 | AC-11-6（仕様として明記） |
+| 11 | 段別カウントの5箇所のどれかを足し忘れ、0件と欠測を区別できない | 計測不能 | AC-11-9 |
+| 12 | AC の検証コマンドが `.data` を通さず、**実装が正しくても fail** する | 誤った手戻り | AC-9-1 の注記 |
 
 ## 8. 実装順序（依存関係順）
 
@@ -304,9 +365,10 @@ tatsukiが45分、実際にあなたのXアカウントを見ながら、
 
 ## 9. 受入条件（DoD）
 
-- [ ] AC-9-1〜3 / AC-10-1〜6 / AC-11-1〜9 が**すべて**検証コマンドで pass
+- [ ] AC-9-1〜3 / AC-10-1〜6 / AC-11-1〜10 が**すべて**検証コマンドで pass
 - [ ] `apps/worker test` / `packages/db test` / `typecheck` / `build` が green（**PM 自身が再実行**）
-- [ ] negative case 3件以上（CTA 無しウェビナー / 2回目の予約 / 候補SQL throw）
+- [ ] negative case 4件以上（CTA 無しウェビナー / 2回目の予約 / 候補SQL throw / migration 前の INSERT）
+- [ ] AC-10-5 が名指しする既存テスト3箇所を**更新**し、守る2箇所が green のままであること
 - [ ] 独立レビュー（fresh Sonnet）の致命・重要が 0
 - [ ] migration があるので **fresh Opus max のゲートを1発**通す
 - [ ] 有効化の直前に `stage_enabled_at` を現在時刻に更新した記録がある
