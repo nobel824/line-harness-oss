@@ -15,7 +15,6 @@ import {
 import { addJitter, sleep } from './stealth.js';
 import { pushViaHarnessProxy } from './line-proxy-send.js';
 import type { HarnessProxyDispatch } from './line-proxy-send.js';
-import { ARCHIVE_WINDOW_DAYS } from './webinar-schedule.js';
 
 const LEAD_SECONDS = 300;
 
@@ -98,8 +97,7 @@ export async function processWebinarReminders(
           type: 'text',
           text:
             `${head}\n\n「${reg.title}」\n${fmtJstDateTime(reg.session_start_at)}〜\n\n` +
-            `こちらから参加してください👇\n${buildWebinarUrl(liffId, reg.slug, reg.session_start_at)}` +
-            `\n\n配信のあと${ARCHIVE_WINDOW_DAYS}日間は、このリンクから見返せます。`,
+            `こちらから参加してください👇\n${buildWebinarUrl(liffId, reg.slug, reg.session_start_at)}`,
         },
       ], reg.id, options.proxyDispatch);
       // 実送信が成功した後だけ通知済みにする。失敗時は NULL のままなので次 tick で再試行。
@@ -134,8 +132,7 @@ export async function sendWebinarRegistrationConfirmation(
           `✅ ${fmtJstDateTime(sessionStartAt)} の回で受付しました\n\n` +
           `「${webinar.title}」\n\n` +
           `専用の入場リンクです👇\n${admissionUrl}\n\n` +
-          `開始5分前にも同じリンクをお送りします。\n` +
-          `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、このリンクから見返せます。`,
+          `開始5分前にも同じリンクをお送りします。`,
       },
     ], crypto.randomUUID(), options.proxyDispatch);
   } catch (err) {
