@@ -12,7 +12,15 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { buildMeetingDateOptions } from './date-options.js';
 import { FormFieldControl, type FormField } from './form-fields.js';
-import { sessionPickAction, submitFormThenRegister } from './registration-flow.js';
+import { RegistrationCompletionCloseButton } from './registration-completion.js';
+import {
+  confirmRegistrationResult,
+  registrationCompletionHeading,
+  registrationSubmitView,
+  sessionPickAction,
+  submitFormThenRegister,
+  type RegistrationCompletion,
+} from './registration-flow.js';
 import './styles.css';
 
 // LIFF SDK は index.html の script タグでグローバル注入される
@@ -873,7 +881,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
           registered={registered}
           submitting={registering}
           onClose={() => setSessionSheet(null)}
-          onConfirm={() => registerSession(sessionSheet.sessionStartAt).then(() => setSessionSheet(null))}
+          onConfirm={() => registerSession(sessionSheet.sessionStartAt)}
         />
       ) : null}
       </>
@@ -976,7 +984,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
           registered={registered}
           submitting={registering}
           onClose={() => setSessionSheet(null)}
-          onConfirm={() => registerSession(sessionSheet.sessionStartAt).then(() => setSessionSheet(null))}
+          onConfirm={() => registerSession(sessionSheet.sessionStartAt)}
         />
       ) : null}
       </>
@@ -1601,6 +1609,7 @@ function PreRegistrationSheet({
   const [values, setValues] = useState<Record<string, string | string[]>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [completion, setCompletion] = useState<RegistrationCompletion | null>(null);
   const changing = registered !== null && registered !== sessionStartAt;
   const inputCls =
     'w-full min-w-0 rounded border border-gray-300 bg-white px-3 py-2 text-base text-gray-900';
@@ -1622,6 +1631,7 @@ function PreRegistrationSheet({
         return;
       }
     }
+    const completionTarget: RegistrationCompletion = { sessionStartAt, changing };
     setSubmitting(true);
     setError(null);
     const result = await submitFormThenRegister({
@@ -1632,12 +1642,14 @@ function PreRegistrationSheet({
       }),
       register: () => register(sessionStartAt),
     });
-    if (!result.ok) {
-      setError(result.error);
+    const view = registrationSubmitView(result, completionTarget);
+    if (view.type === 'error') {
+      setError(view.error);
       setSubmitting(false);
       return;
     }
-    onClose();
+    setSubmitting(false);
+    setCompletion(view.completion);
   };
 
   return (
@@ -1651,62 +1663,95 @@ function PreRegistrationSheet({
       <div className="mx-auto flex w-full max-w-md max-h-[75vh] flex-col overflow-hidden rounded-t-2xl bg-white p-5 text-gray-900">
         <div className="mx-auto mb-3 h-1 w-10 rounded bg-gray-300" />
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-            <h2 className="text-lg font-bold">
-              {changing
-                ? `${formatJp(sessionStartAt)} の回に変更する`
-                : `${formatJp(sessionStartAt)} の回に申し込む`}
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              {changing && registered !== null
-                ? `いまの予約（${formatJp(registered)} の回）は取り消されます。`
-                : 'あとから別の回に変更できます。'}
-            </p>
-            <p className="mt-1 text-sm text-gray-500">すべての項目にご回答ください。</p>
-            <div className="mt-4 space-y-4 pb-2">
-              {form.fields.map((f) => (
-                <label key={f.name} className="block text-sm">
-                  <span className="font-medium">
-                    {f.label}
-                    {f.required && <span className="ml-1 text-red-500">*</span>}
-                  </span>
-                  <FormFieldControl
-                    field={f}
-                    value={values[f.name]}
-                    onChange={setValue}
-                    onComplete={() => undefined}
-                    inputCls={inputCls}
-                  />
-                </label>
-              ))}
+          {completion ? (
+            <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+              <RegistrationCompletionDetails completion={completion} />
             </div>
-            {error && <p className="mt-2 text-sm font-bold text-red-600">{error}</p>}
-          </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+              <h2 className="text-lg font-bold">
+                {changing
+                  ? `${formatJp(sessionStartAt)} の回に変更する`
+                  : `${formatJp(sessionStartAt)} の回に申し込む`}
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                {changing && registered !== null
+                  ? `いまの予約（${formatJp(registered)} の回）は取り消されます。`
+                  : 'あとから別の回に変更できます。'}
+              </p>
+              <p className="mt-1 text-sm text-gray-500">すべての項目にご回答ください。</p>
+              <div className="mt-4 space-y-4 pb-2">
+                {form.fields.map((f) => (
+                  <label key={f.name} className="block text-sm">
+                    <span className="font-medium">
+                      {f.label}
+                      {f.required && <span className="ml-1 text-red-500">*</span>}
+                    </span>
+                    <FormFieldControl
+                      field={f}
+                      value={values[f.name]}
+                      onChange={setValue}
+                      onComplete={() => undefined}
+                      inputCls={inputCls}
+                    />
+                  </label>
+                ))}
+              </div>
+              {error && <p className="mt-2 text-sm font-bold text-red-600">{error}</p>}
+            </div>
+          )}
           <div className="-mx-5 -mb-5 shrink-0 border-t border-gray-200 bg-white px-5 pb-4 pt-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
-            <button
-              type="button"
-              onClick={() => void submit()}
-              disabled={submitting}
-              className="w-full rounded-full bg-[#06C755] py-3 text-base font-bold text-white shadow disabled:opacity-50 active:opacity-80"
-            >
-              {submitting
-                ? '送信中...'
-                : changing
-                  ? 'この回に変更する'
-                  : 'この回で申し込む'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={submitting}
-              className="mt-2 w-full rounded-full border border-gray-300 py-2.5 font-bold text-gray-600 active:opacity-80 disabled:opacity-50"
-            >
-              戻る
-            </button>
+            {completion ? (
+              <RegistrationCompletionCloseButton onClose={onClose} />
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void submit()}
+                  disabled={submitting}
+                  className="w-full rounded-full bg-[#06C755] py-3 text-base font-bold text-white shadow disabled:opacity-50 active:opacity-80"
+                >
+                  {submitting
+                    ? '送信中...'
+                    : changing
+                      ? 'この回に変更する'
+                      : 'この回で申し込む'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={submitting}
+                  className="mt-2 w-full rounded-full border border-gray-300 py-2.5 font-bold text-gray-600 active:opacity-80 disabled:opacity-50"
+                >
+                  戻る
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function RegistrationCompletionDetails({ completion }: { completion: RegistrationCompletion }) {
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <span className="text-[#06C755]" aria-hidden="true">✅</span>
+        <h2 className="text-lg font-bold">
+          {registrationCompletionHeading(completion.changing)}
+        </h2>
+      </div>
+      <p className="mt-4 text-lg font-bold">
+        {formatJp(completion.sessionStartAt)} の回
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-gray-600">
+        開始5分前に、LINEで視聴リンクをお送りします。
+        <br />
+        このページは閉じて大丈夫です。
+      </p>
+    </>
   );
 }
 
@@ -1724,16 +1769,20 @@ function ConfirmRegistrationSheet({
   onConfirm: () => Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [completion, setCompletion] = useState<RegistrationCompletion | null>(null);
   const changing = registered !== null && registered !== sessionStartAt;
 
   const confirm = async () => {
     if (submitting) return;
+    const completionTarget: RegistrationCompletion = { sessionStartAt, changing };
     setError(null);
-    try {
-      await onConfirm();
-    } catch {
-      setError('送信に失敗しました。もう一度お試しください。');
+    const result = await confirmRegistrationResult(onConfirm);
+    const view = registrationSubmitView(result, completionTarget);
+    if (view.type === 'error') {
+      setError(view.error);
+      return;
     }
+    setCompletion(view.completion);
   };
 
   return (
@@ -1746,38 +1795,49 @@ function ConfirmRegistrationSheet({
       />
       <div className="mx-auto flex w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white p-5 text-gray-900">
         <div className="mx-auto mb-3 h-1 w-10 rounded bg-gray-300" />
-        <h2 className="text-lg font-bold">
-          {changing
-            ? `${formatJp(sessionStartAt)} の回に変更します`
-            : `${formatJp(sessionStartAt)} の回を予約します`}
-        </h2>
-        <p className="mt-2 text-sm text-gray-600">
-          {changing && registered !== null
-            ? `いまの予約（${formatJp(registered)} の回）は取り消されます。`
-            : '開始5分前にLINEで視聴リンクをお送りします。'}
-        </p>
-        <p className="mt-1 text-sm text-gray-600">あとから別の回に変更できます。</p>
-        {error && <p className="mt-3 text-sm font-bold text-red-600">{error}</p>}
-        <button
-          type="button"
-          onClick={() => void confirm()}
-          disabled={submitting}
-          className="mt-5 w-full rounded-full bg-[#06C755] py-3 text-base font-bold text-white shadow disabled:opacity-50 active:opacity-80"
-        >
-          {submitting
-            ? '送信中...'
-            : changing
-              ? 'この回に変更する'
-              : 'この回で予約する'}
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={submitting}
-          className="mt-2 w-full rounded-full border border-gray-300 py-2.5 font-bold text-gray-600 active:opacity-80 disabled:opacity-50"
-        >
-          戻る
-        </button>
+        {completion ? (
+          <>
+            <RegistrationCompletionDetails completion={completion} />
+            <div className="mt-5">
+              <RegistrationCompletionCloseButton onClose={onClose} />
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-bold">
+              {changing
+                ? `${formatJp(sessionStartAt)} の回に変更します`
+                : `${formatJp(sessionStartAt)} の回を予約します`}
+            </h2>
+            <p className="mt-2 text-sm text-gray-600">
+              {changing && registered !== null
+                ? `いまの予約（${formatJp(registered)} の回）は取り消されます。`
+                : '開始5分前にLINEで視聴リンクをお送りします。'}
+            </p>
+            <p className="mt-1 text-sm text-gray-600">あとから別の回に変更できます。</p>
+            {error && <p className="mt-3 text-sm font-bold text-red-600">{error}</p>}
+            <button
+              type="button"
+              onClick={() => void confirm()}
+              disabled={submitting}
+              className="mt-5 w-full rounded-full bg-[#06C755] py-3 text-base font-bold text-white shadow disabled:opacity-50 active:opacity-80"
+            >
+              {submitting
+                ? '送信中...'
+                : changing
+                  ? 'この回に変更する'
+                  : 'この回で予約する'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="mt-2 w-full rounded-full border border-gray-300 py-2.5 font-bold text-gray-600 active:opacity-80 disabled:opacity-50"
+            >
+              戻る
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
