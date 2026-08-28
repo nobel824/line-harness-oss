@@ -1015,16 +1015,12 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
-<<<<<<< HEAD
-CREATE TABLE webhook_event_dedup (
+CREATE TABLE IF NOT EXISTS webhook_event_dedup (
   event_id   TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
-CREATE TABLE webinar_comments (
-=======
 CREATE TABLE IF NOT EXISTS webinar_comments (
->>>>>>> upstream/main
   id TEXT PRIMARY KEY,
   webinar_id TEXT NOT NULL REFERENCES webinars(id) ON DELETE CASCADE,
   at_seconds INTEGER NOT NULL,

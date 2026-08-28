@@ -165,20 +165,34 @@ describe('GoogleCalendarClient.createEvent', () => {
   });
 });
 
+/**
+ * FreeBusy と、終日予定を補完する events.list の両方に応答する fetch モック。
+ * Response を呼び出しごとに作り直すのが要点で、同じインスタンスを
+ * mockResolvedValue で使い回すと 2 回目の body 読み取りが
+ * "Body has already been read" で落ちる。
+ */
+function freeBusyFetch(freeBusyBody: unknown) {
+  return async (input: RequestInfo | URL): Promise<Response> => {
+    const body = String(input).includes('/freeBusy') ? freeBusyBody : { items: [] };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+}
+
 describe('GoogleCalendarClient.getFreeBusy', () => {
   const timeMin = '2026-08-20T00:00:00.000Z';
   const timeMax = '2026-08-21T00:00:00.000Z';
 
   test('busyCalendarIds 未指定なら主カレンダーだけを問い合わせ、主カレンダーの busy を返す', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        calendars: {
-          'primary@example.com': {
-            busy: [{ start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' }],
-          },
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(freeBusyFetch({
+      calendars: {
+        'primary@example.com': {
+          busy: [{ start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' }],
         },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
-    );
+      },
+    }));
     const client = new GoogleCalendarClient({
       calendarId: 'primary@example.com',
       accessToken: 'token',
@@ -196,11 +210,8 @@ describe('GoogleCalendarClient.getFreeBusy', () => {
   });
 
   test('busyCalendarIds が空配列なら主カレンダーだけを問い合わせる', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ calendars: { primary: { busy: [] } } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      freeBusyFetch({ calendars: { primary: { busy: [] } } }),
     );
     const client = new GoogleCalendarClient({
       calendarId: 'primary',
@@ -214,15 +225,13 @@ describe('GoogleCalendarClient.getFreeBusy', () => {
   });
 
   test('補助カレンダーを重複除去して問い合わせ、busy をカレンダー順に連結する', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        calendars: {
-          primary: { busy: [{ start: 'primary-start', end: 'primary-end' }] },
-          secondary: { busy: [{ start: 'secondary-start', end: 'secondary-end' }] },
-          tertiary: { busy: [{ start: 'tertiary-start', end: 'tertiary-end' }] },
-        },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
-    );
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(freeBusyFetch({
+      calendars: {
+        primary: { busy: [{ start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' }] },
+        secondary: { busy: [{ start: '2026-08-20T03:00:00.000Z', end: '2026-08-20T04:00:00.000Z' }] },
+        tertiary: { busy: [{ start: '2026-08-20T05:00:00.000Z', end: '2026-08-20T06:00:00.000Z' }] },
+      },
+    }));
     const client = new GoogleCalendarClient({
       calendarId: 'primary',
       accessToken: 'token',
@@ -230,9 +239,9 @@ describe('GoogleCalendarClient.getFreeBusy', () => {
     });
 
     await expect(client.getFreeBusy(timeMin, timeMax)).resolves.toEqual([
-      { start: 'primary-start', end: 'primary-end' },
-      { start: 'secondary-start', end: 'secondary-end' },
-      { start: 'tertiary-start', end: 'tertiary-end' },
+      { start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' },
+      { start: '2026-08-20T03:00:00.000Z', end: '2026-08-20T04:00:00.000Z' },
+      { start: '2026-08-20T05:00:00.000Z', end: '2026-08-20T06:00:00.000Z' },
     ]);
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(init?.body)).items).toEqual([
@@ -244,17 +253,15 @@ describe('GoogleCalendarClient.getFreeBusy', () => {
 
   test('補助カレンダーの errors は警告してスキップし、主カレンダーの busy を返す', async () => {
     const warnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        calendars: {
-          primary: { busy: [{ start: 'primary-start', end: 'primary-end' }] },
-          secondary: {
-            busy: [{ start: 'secondary-start', end: 'secondary-end' }],
-            errors: [{ domain: 'calendar', reason: 'notFound' }],
-          },
+    vi.spyOn(globalThis, 'fetch').mockImplementation(freeBusyFetch({
+      calendars: {
+        primary: { busy: [{ start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' }] },
+        secondary: {
+          busy: [{ start: '2026-08-20T03:00:00.000Z', end: '2026-08-20T04:00:00.000Z' }],
+          errors: [{ domain: 'calendar', reason: 'notFound' }],
         },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
-    );
+      },
+    }));
     const client = new GoogleCalendarClient({
       calendarId: 'primary',
       accessToken: 'token',
@@ -262,7 +269,7 @@ describe('GoogleCalendarClient.getFreeBusy', () => {
     });
 
     await expect(client.getFreeBusy(timeMin, timeMax)).resolves.toEqual([
-      { start: 'primary-start', end: 'primary-end' },
+      { start: '2026-08-20T01:00:00.000Z', end: '2026-08-20T02:00:00.000Z' },
     ]);
     expect(warnMock).toHaveBeenCalled();
   });

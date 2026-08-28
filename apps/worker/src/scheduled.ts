@@ -3,6 +3,8 @@ import {
   getLineAccounts,
   enqueueFollowingMileageMilestones,
   processPendingMileageEvents,
+  cleanupWebhookEventDedup,
+  toJstString,
 } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts, processQueuedBroadcasts } from './services/broadcast.js';
@@ -276,6 +278,19 @@ export async function scheduled(
       } catch (err) {
         console.error('log-retention failed:', err);
       }
+    }
+  }
+
+  // Webhook dedup cleanup — 6h cron tick. 24h 超の webhook_event_dedup 行を削除して
+  // 無限増加を防ぐ。LINE の再送ウィンドウは 24h より十分短いので安全。cutoff は
+  // 保存形式 (JST 壁時計・オフセット無し) に合わせて 23 文字にスライスして文字列比較。
+  if (event.cron === '0 */6 * * *') {
+    try {
+      const cutoff = toJstString(new Date(Date.now() - 24 * 60 * 60 * 1000)).slice(0, 23);
+      const purged = await cleanupWebhookEventDedup(env.DB, cutoff);
+      console.log(`[webhook-dedup-cleanup] purged=${purged}`);
+    } catch (e) {
+      console.error('webhook-dedup-cleanup error:', e);
     }
   }
 

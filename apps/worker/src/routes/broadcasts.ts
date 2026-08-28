@@ -62,11 +62,11 @@ function parseJsonArray(s: unknown): string[] | null {
   }
 }
 
-<<<<<<< HEAD
 function hasSegmentConditions(row: DbBroadcast): boolean {
   const segmentConditions = (row as unknown as Record<string, unknown>).segment_conditions;
   return typeof segmentConditions === 'string' && segmentConditions.trim() !== '';
-=======
+}
+
 function parseJsonObject(s: unknown): Record<string, unknown> | null {
   if (!s) return null;
   if (typeof s === 'object') return s as Record<string, unknown>;
@@ -79,7 +79,6 @@ function parseJsonObject(s: unknown): Record<string, unknown> | null {
   } catch {
     return null;
   }
->>>>>>> upstream/main
 }
 
 type CreateBroadcastBody = {
@@ -134,7 +133,6 @@ function serializeBroadcast(row: DbBroadcast) {
     // field a caller reading history cannot tell it apart from a real
     // send-to-everyone. Note tag sends over 500 recipients also carry a
     // tag_exists marker here — target_type stays 'tag' for those.
-    segmentConditions: parseJsonObject(r.segment_conditions),
     accountIds: parseJsonArray(r.account_ids),
     dedupPriority: parseJsonArray(r.dedup_priority),
     failedAccountIds: parseJsonArray(r.failed_account_ids),
@@ -877,7 +875,7 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
         const ctx = c.executionCtx as ExecutionContext;
         const defaultClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
         ctx.waitUntil(
-          processQueuedBroadcasts(c.env.DB, defaultClient, c.env.WORKER_URL).catch((err) => {
+          processQueuedBroadcasts(c.env.DB, defaultClient, c.env.WORKER_URL, c.env).catch((err) => {
             console.error('[all-segment] background queue processing failed:', err);
           }),
         );

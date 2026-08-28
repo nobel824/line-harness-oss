@@ -70,7 +70,6 @@ export class GoogleCalendarClient {
       }>;
     };
 
-<<<<<<< HEAD
     const busy: BusyInterval[] = [];
     for (const calendarId of calendarIds) {
       const calendarData = data.calendars?.[calendarId];
@@ -87,17 +86,14 @@ export class GoogleCalendarClient {
       }
       busy.push(...(calendarData?.busy ?? []));
     }
-    return busy;
-=======
-    const calendarData = data.calendars?.[this.config.calendarId];
-    const freeBusy = calendarData?.busy ?? [];
 
     // GoogleのFreeBusyは「予定あり」のイベントだけを返す。終日予定が
     // transparency=transparent（空き時間扱い）だと画面上に予定があっても返らず、
     // 予約枠が開いてしまう。events.listで終日イベントだけを補完し、終日予定は
     // ユーザーの明示的なブロックとして扱う。
+    // 終日イベントの補完は挙動変更範囲を抑えるため主カレンダーだけを対象にする。
     const allDayBusy = await this.getAllDayBusy(timeMin, timeMax);
-    return mergeBusyIntervals([...freeBusy, ...allDayBusy]);
+    return mergeBusyIntervals([...busy, ...allDayBusy]);
   }
 
   private async getAllDayBusy(timeMin: string, timeMax: string): Promise<BusyInterval[]> {
@@ -143,7 +139,6 @@ export class GoogleCalendarClient {
     } while (pageToken);
 
     return intervals;
->>>>>>> upstream/main
   }
 
   /**

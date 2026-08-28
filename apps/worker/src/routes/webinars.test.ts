@@ -1003,12 +1003,11 @@ describe('admin CRUD', () => {
     expect(badSlug.status).toBe(400);
   });
 
-<<<<<<< HEAD
   test('PUT /api/webinars/:id — introText を保存し、GET で返す', async () => {
     const introText = 'この動画で、明日から使える方法が分かります。\n今すぐご参加ください。';
     dbMocks.getWebinarById.mockResolvedValue(makeWebinar({ intro_text: null }));
     dbMocks.updateWebinar.mockResolvedValue(makeWebinar({ intro_text: introText }));
-    const put = await req('/api/webinars/w1', {
+    const put = await reqAsStaff('/api/webinars/w1', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ introText }),
     });
@@ -1027,7 +1026,7 @@ describe('admin CRUD', () => {
     const introText = '既存の申し込み文言';
     dbMocks.getWebinarById.mockResolvedValue(makeWebinar({ intro_text: introText }));
     dbMocks.updateWebinar.mockResolvedValue(makeWebinar({ intro_text: introText }));
-    const put = await req('/api/webinars/w1', {
+    const put = await reqAsStaff('/api/webinars/w1', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: '更新後タイトル' }),
     });
@@ -1052,7 +1051,7 @@ describe('admin CRUD', () => {
     dbMocks.updateWebinar.mockResolvedValue(makeWebinar({
       intro_image_url: introImageUrl, pre_registration_form_id: preRegistrationFormId,
     }));
-    const put = await req('/api/webinars/w1', {
+    const put = await reqAsStaff('/api/webinars/w1', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ introImageUrl, preRegistrationFormId }),
     });
@@ -1081,7 +1080,7 @@ describe('admin CRUD', () => {
     dbMocks.updateWebinar.mockResolvedValue(makeWebinar({
       intro_image_url: introImageUrl, pre_registration_form_id: preRegistrationFormId,
     }));
-    const put = await req('/api/webinars/w1', {
+    const put = await reqAsStaff('/api/webinars/w1', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: '更新後タイトル' }),
     });
@@ -1092,7 +1091,8 @@ describe('admin CRUD', () => {
     const putBody = (await put.json()) as { data: Record<string, unknown> };
     expect(putBody.data.introImageUrl).toBe(introImageUrl);
     expect(putBody.data.preRegistrationFormId).toBe(preRegistrationFormId);
-=======
+  });
+
   // Regression: POST /api/webinars was the one door requireRole('owner',
   // 'admin') was not applied to. A staff key could create a webinar with an
   // arbitrary videoPrefix and status: 'active' directly, reaching the same
@@ -1115,7 +1115,6 @@ describe('admin CRUD', () => {
     );
     expect(res.status).toBe(403);
     expect(dbMocks.createWebinar).not.toHaveBeenCalled();
->>>>>>> upstream/main
   });
 
   test('PUT /api/webinars/:id/comments — 一括置換', async () => {

@@ -126,7 +126,7 @@ const CLIENT_ONLY: readonly string[] = [
  * rich-menu-groups / integrations あたりが機能として大きい。
  */
 const KNOWN_GAPS: readonly string[] = [
-  // booking (26)
+  // booking (27)
   'DELETE /api/booking/admin/menus/{id}',
   'DELETE /api/booking/admin/staff/{id}',
   'DELETE /api/booking/admin/staff/{id}/google-calendar',
@@ -151,6 +151,9 @@ const KNOWN_GAPS: readonly string[] = [
   'PUT /api/booking/admin/staff/{id}',
   'PUT /api/booking/admin/staff/{id}/availability-rules',
   'PUT /api/booking/admin/staff/{id}/google-calendar',
+  // フォーク独自: 複数カレンダーの busy 参照。upstream の spec に書くと
+  // 本体追従のたびに衝突するので、同じ google-calendar 系の他ルートと揃えてここに置く。
+  'PUT /api/booking/admin/staff/{id}/google-calendar/busy-calendars',
   'PUT /api/booking/admin/staff/{id}/menus',
   'PUT /api/booking/admin/staff/{id}/shifts',
   // events (14)

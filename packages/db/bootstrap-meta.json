@@ -75,17 +75,12 @@
     "067_mileage_keyword_auto_reply.sql",
     "068_media_inquiries.sql",
     "069_rich_menu_selected.sql",
-<<<<<<< HEAD
+    "070_admin_sso_jti.sql",
     "070_google_calendar_busy_calendars.sql",
     "071_webinar_intro_text.sql",
     "072_webinar_intro_image_url.sql",
     "073_webinar_pre_registration_form.sql",
     "074_auto_reply_second_message.sql"
   ],
-  "migrationCount": 80
-=======
-    "070_admin_sso_jti.sql"
-  ],
-  "migrationCount": 75
->>>>>>> upstream/main
+  "migrationCount": 81
 }
