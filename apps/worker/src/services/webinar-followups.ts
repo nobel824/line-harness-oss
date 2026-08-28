@@ -60,6 +60,7 @@ export type RegisteredNoShowWatch = {
   lastPositionSeconds: number | null;
   formCtaAtSeconds: number | null;
   durationSeconds: number;
+  admissionUrl: string | null;
 };
 
 export type ArchiveClosingWatch = RegisteredNoShowWatch & {
@@ -111,13 +112,19 @@ function buildRegisteredNoShowText(
       `「${title}」の続きがまだ残っています。\n\n` +
       `いちばんお伝えしたいのは終盤です。\n` +
       `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
-      `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。\n\n` +
+      (watch.admissionUrl
+        ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから続きをご覧いただけます👇\n` +
+          `${watch.admissionUrl}\n\n`
+        : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。\n\n`) +
       remainingWatchLine(watch.durationSeconds, lastPosition)
     );
   }
   return (
     `ご予約いただいた「${title}」の回にお会いできませんでした。\n\n` +
-    `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。\n\n` +
+    (watch?.admissionUrl
+      ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから見返せます👇\n` +
+        `${watch.admissionUrl}\n\n`
+      : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。\n\n`) +
     `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
     `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
     `※約57分です。カメラ・マイクは使いません。`
@@ -385,6 +392,7 @@ async function journeyCandidates(
        )
        SELECT w.id AS webinar_id, w.account_id, m.friend_id, w.slug, w.title,
               w.duration_seconds, cfg.booking_url,
+              m.missed_session_at AS session_start_at,
               datetime(m.missed_session_at, 'unixepoch') AS source_at,
               (
                 SELECT v.last_position_seconds FROM webinar_viewers v
@@ -684,6 +692,10 @@ export async function processWebinarFollowups(
             lastPositionSeconds: candidate.last_position_seconds ?? null,
             formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
             durationSeconds: candidate.duration_seconds ?? 0,
+            admissionUrl:
+              candidate.session_start_at === null || candidate.session_start_at === undefined
+                ? null
+                : buildWebinarUrl(delivery.liffId, candidate.slug, candidate.session_start_at),
           }
         : kind === 'archive_closing'
           ? (() => {
