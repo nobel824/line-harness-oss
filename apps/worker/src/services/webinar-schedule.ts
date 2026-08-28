@@ -3,7 +3,10 @@
 
 const JST_OFFSET = 9 * 3600;
 const DAY = 86400;
-const LOOKAHEAD_DAYS = 8;
+export const REGISTRATION_LEAD_DAYS = 3;
+export const REGISTRATION_LEAD_SECONDS = REGISTRATION_LEAD_DAYS * DAY;
+// 先読みは基準の8日分に予約リード日数を加え、絞り込み後の候補数を確保する。
+const LOOKAHEAD_DAYS = 8 + REGISTRATION_LEAD_DAYS;
 
 // 配信終了後にアーカイブを見られる期間。無期限だと先延ばしを生み、
 // 「次の回に選び直せます」と案内している追客とも食い違うため区切る。
@@ -63,7 +66,7 @@ export function parseScheduleRules(json: string): ScheduleRule[] {
   return rules;
 }
 
-/** now の前後 (過去 durationSeconds 〜 未来 8 日) の候補開始時刻を列挙 */
+/** now の前後 (過去 durationSeconds 〜 未来 LOOKAHEAD_DAYS 日) の候補開始時刻を列挙 */
 function candidateStarts(
   rules: ScheduleRule[],
   now: number,
@@ -113,7 +116,7 @@ export function resolveSession(
   return { live: false, sessionStartAt: null, offsetSeconds: null, nextSessionAt: next };
 }
 
-/** now より未来のセッション開始時刻を昇順で最大 count 件返す (セッション選択メニュー用) */
+/** now + REGISTRATION_LEAD_SECONDS 以降の開始時刻を昇順で最大 count 件返す (セッション選択メニュー用) */
 export function upcomingSessions(
   rules: ScheduleRule[],
   durationSeconds: number,
@@ -121,6 +124,6 @@ export function upcomingSessions(
   count: number,
 ): number[] {
   return candidateStarts(rules, nowEpochSeconds, durationSeconds)
-    .filter((s) => s > nowEpochSeconds)
+    .filter((s) => s >= nowEpochSeconds + REGISTRATION_LEAD_SECONDS)
     .slice(0, count);
 }

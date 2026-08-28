@@ -64,6 +64,7 @@ vi.mock('../services/webinar-consultation-booking.js', () => consultationMock);
 
 const { webinarRoutes, ARCHIVE_WINDOW_SECONDS } = await import('./webinars.js');
 const { signWebinarToken } = await import('../lib/webinar-token.js');
+const { REGISTRATION_LEAD_SECONDS } = await import('../services/webinar-schedule.js');
 
 const SECRET = 'channel-secret';
 // 2026-07-29 20:00 JST 開始の once スケジュール
@@ -408,12 +409,10 @@ describe('GET /api/liff/webinars/:slug', () => {
     expect(body.live).toBe(false);
     expect(body.waiting).toBeUndefined();
     expect(body.nextSessionAt).toBe(SESSION_START);
-    expect(body.upcoming).toEqual([SESSION_START]);
+    expect(body.upcoming).toEqual([]);
     expect(body.registeredSessionAt).toBeNull();
     expect(dbMocks.upsertWebinarViewer).not.toHaveBeenCalled();
-    expect(dbMocks.recordWebinarPickerOpen).toHaveBeenCalledWith(
-      expect.anything(), 'w1', 'friend-1',
-    );
+    expect(dbMocks.recordWebinarPickerOpen).not.toHaveBeenCalled();
   });
 
   test('すでに未来回を予約済みなら予約画面の離脱として記録しない', async () => {
@@ -422,9 +421,12 @@ describe('GET /api/liff/webinars/:slug', () => {
       id: 'reg-future', webinar_id: 'w1', friend_id: 'friend-1',
       session_start_at: SESSION_START, notified_at: null, created_at: 'x',
     });
-    await req('/api/liff/webinars/test-webinar', {
+    const res = await req('/api/liff/webinars/test-webinar', {
       headers: { Authorization: 'Bearer token' },
     });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.upcoming).toEqual([]);
+    expect(body.registeredSessionAt).toBe(SESSION_START);
     expect(dbMocks.recordWebinarPickerOpen).not.toHaveBeenCalled();
   });
 
@@ -437,7 +439,7 @@ describe('GET /api/liff/webinars/:slug', () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.live).toBe(false);
     expect(body.waiting).toBeUndefined();
-    expect(body.upcoming).toEqual([SESSION_START]);
+    expect(body.upcoming).toEqual([]);
   });
 
   test('開始10分前から予約済み本人だけ待機ルームに入る', async () => {
@@ -864,20 +866,19 @@ describe('POST /api/liff/webinars/:slug/funnel-event', () => {
 });
 
 describe('POST /api/liff/webinars/:slug/register', () => {
-  test('実在する未来セッションを予約し確認プッシュを waitUntil で送る', async () => {
+  test('開始1時間前の未来セッションはリード時間未満なので 400 invalid_session', async () => {
     vi.setSystemTime(new Date((SESSION_START - 3600) * 1000));
     const res = await postJson('/api/liff/webinars/test-webinar/register', {
       sessionStartAt: SESSION_START,
     });
-    expect(res.status).toBe(200);
-    expect(dbMocks.upsertWebinarRegistration).toHaveBeenCalledWith(
-      expect.anything(), 'w1', 'friend-1', SESSION_START,
-    );
-    expect(execCtx.waitUntil).toHaveBeenCalled();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_session' });
+    expect(dbMocks.upsertWebinarRegistration).not.toHaveBeenCalled();
+    expect(execCtx.waitUntil).not.toHaveBeenCalled();
   });
 
   test('同じセッションの重複予約では受付確認を再送しない', async () => {
-    vi.setSystemTime(new Date((SESSION_START - 3600) * 1000));
+    vi.setSystemTime(new Date((SESSION_START - REGISTRATION_LEAD_SECONDS - 3600) * 1000));
     dbMocks.upsertWebinarRegistration.mockResolvedValue(false);
     const res = await postJson('/api/liff/webinars/test-webinar/register', {
       sessionStartAt: SESSION_START,
@@ -885,6 +886,17 @@ describe('POST /api/liff/webinars/:slug/register', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, sessionStartAt: SESSION_START, created: false });
     expect(execCtx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  test('リード時間の境界ちょうどの未来セッションは予約できる', async () => {
+    vi.setSystemTime(new Date((SESSION_START - REGISTRATION_LEAD_SECONDS) * 1000));
+    const res = await postJson('/api/liff/webinars/test-webinar/register', {
+      sessionStartAt: SESSION_START,
+    });
+    expect(res.status).toBe(200);
+    expect(dbMocks.upsertWebinarRegistration).toHaveBeenCalledWith(
+      expect.anything(), 'w1', 'friend-1', SESSION_START,
+    );
   });
 
   test('スケジュール上に存在しない時刻は 400', async () => {

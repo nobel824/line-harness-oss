@@ -46,6 +46,14 @@ export function sessionPickAction(
   return { type: 'open-confirm', sessionStartAt };
 }
 
+export function shouldShowSessionPicker(
+  live: boolean,
+  upcoming: number[] | undefined,
+  registeredSessionAt: number | null,
+): boolean {
+  return !live && ((upcoming?.length ?? 0) > 0 || registeredSessionAt !== null);
+}
+
 export async function submitFormThenRegister(opts: {
   submit: () => Promise<Response>;
   register: () => Promise<unknown>;

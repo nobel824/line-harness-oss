@@ -18,6 +18,7 @@ import {
   registrationCompletionHeading,
   registrationSubmitView,
   sessionPickAction,
+  shouldShowSessionPicker,
   submitFormThenRegister,
   type RegistrationCompletion,
 } from './registration-flow.js';
@@ -794,7 +795,11 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
   }
 
   // ---- セッション選択メニュー (開催回を選んで予約) ----
-  if (!state.live && (state.upcoming?.length ?? 0) > 0) {
+  if (shouldShowSessionPicker(
+    state.live,
+    state.upcoming,
+    state.registeredSessionAt ?? null,
+  )) {
     const upcoming = state.upcoming!;
     const visibleUpcoming = upcoming.slice(0, visibleSessionCount);
     const registered = state.registeredSessionAt ?? null;
@@ -861,6 +866,9 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
             >
               もっと先の時間を見る
             </button>
+          )}
+          {upcoming.length === 0 && (
+            <p className="text-center text-sm text-gray-400">選べる回はまだありません</p>
           )}
         </div>
       </div>

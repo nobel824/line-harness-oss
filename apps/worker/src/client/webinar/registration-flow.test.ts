@@ -5,6 +5,7 @@ import {
   registrationCompletionHeading,
   registrationSubmitView,
   sessionPickAction,
+  shouldShowSessionPicker,
   submitFormThenRegister,
 } from './registration-flow.js';
 
@@ -30,6 +31,24 @@ describe('sessionPickAction', () => {
       type: 'open-confirm',
       sessionStartAt: 200,
     });
+  });
+});
+
+describe('shouldShowSessionPicker', () => {
+  test('候補がある未ライブ状態では表示する', () => {
+    expect(shouldShowSessionPicker(false, [200], null)).toBe(true);
+  });
+
+  test('予約済みで候補が空でも表示する', () => {
+    expect(shouldShowSessionPicker(false, [], 100)).toBe(true);
+  });
+
+  test('未予約で候補も空なら表示しない', () => {
+    expect(shouldShowSessionPicker(false, [], null)).toBe(false);
+  });
+
+  test('ライブ中は候補や予約の有無にかかわらず表示しない', () => {
+    expect(shouldShowSessionPicker(true, [200], 100)).toBe(false);
   });
 });
 
