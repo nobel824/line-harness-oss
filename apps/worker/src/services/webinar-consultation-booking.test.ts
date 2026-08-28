@@ -36,6 +36,7 @@ interface DbOptions {
     meet_url: string | null;
   } | null;
   insertChanges?: number;
+  adminNotifyLineUserId?: string | null;
 }
 
 function fakeDb(options: DbOptions = {}): D1Database {
@@ -43,7 +44,11 @@ function fakeDb(options: DbOptions = {}): D1Database {
     bind: vi.fn((..._args: unknown[]) => ({
       first: vi.fn(async () => {
         if (sql.includes('FROM webinar_followup_configs')) {
-          return { booking_menu_id: 'menu-1', booking_url: 'https://example.com/fallback' };
+          return {
+            booking_menu_id: 'menu-1',
+            booking_url: 'https://example.com/fallback',
+            admin_notify_line_user_id: options.adminNotifyLineUserId ?? null,
+          };
         }
         if (sql.includes('FROM form_submissions fs')) return { ok: 1 };
         if (sql.includes('FROM menus m') && sql.includes('INNER JOIN staff_menus')) {
@@ -168,23 +173,35 @@ describe('bookWebinarConsultation', () => {
     expect(mocks.pushViaHarnessProxy.mock.calls[0][2]).toBe('U123');
   });
 
-  test('運営者通知先設定時は運営者へJST日時とMeet URLを1回通知する', async () => {
-    const db = fakeDb();
+  test('DBに運営者通知先があれば、その宛先へJST日時とMeet URLを1回通知する', async () => {
+    const db = fakeDb({ adminNotifyLineUserId: 'UDBADMIN' });
     const result = await bookWebinarConsultation(db, {
       ...base,
       startsAt: '2026-08-20T01:00:00.000Z',
       proxyBaseUrl: 'https://worker.example.com',
-      adminNotifyLineUserId: 'UADMIN',
     });
 
     expect(mocks.pushViaHarnessProxy).toHaveBeenCalledTimes(2);
-    const adminCall = mocks.pushViaHarnessProxy.mock.calls.find((call) => call[2] === 'UADMIN');
+    const adminCall = mocks.pushViaHarnessProxy.mock.calls.find((call) => call[2] === 'UDBADMIN');
     expect(adminCall).toBeDefined();
     const adminText = (adminCall![3] as Array<{ text: string }>)[0].text;
     expect(adminText).toContain('日時: 8月20日(木) 10:00');
     expect(adminText).toContain('Meet: https://meet.google.com/abc-defg-hij');
     expect(adminText).toContain('お名前: 予約者');
     expect(adminCall![4]).toBe(`${result.bookingId}:admin`);
+  });
+
+  test('DBの運営者通知先がNULLなら環境変数の宛先へフォールバックする', async () => {
+    const db = fakeDb({ adminNotifyLineUserId: null });
+    await bookWebinarConsultation(db, {
+      ...base,
+      startsAt: '2026-08-20T01:00:00.000Z',
+      proxyBaseUrl: 'https://worker.example.com',
+      adminNotifyLineUserId: 'UENVADMIN',
+    });
+
+    expect(mocks.pushViaHarnessProxy).toHaveBeenCalledTimes(2);
+    expect(mocks.pushViaHarnessProxy.mock.calls.some((call) => call[2] === 'UENVADMIN')).toBe(true);
   });
 
   test('運営者向けLINE通知が失敗しても予約確定と予約者通知を維持する', async () => {

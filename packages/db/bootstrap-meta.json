@@ -81,7 +81,8 @@
     "072_webinar_intro_image_url.sql",
     "073_webinar_pre_registration_form.sql",
     "074_auto_reply_second_message.sql",
-    "075_webinar_journey_archive_closing.sql"
+    "075_webinar_journey_archive_closing.sql",
+    "076_webinar_admin_notify_line_user_id.sql"
   ],
-  "migrationCount": 82
+  "migrationCount": 83
 }
