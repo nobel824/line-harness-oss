@@ -384,6 +384,57 @@ launch-consult の必須4点に「**偽の席・偽の値上げ日・リセッ�
 - **文言の実文はまだ書いていない**（3分岐とも）。`uxw-consult` ではなく `writing-consult` の領分（UI ではなく配信本文）
 - 送信時刻 15:00 前後が実際に読まれるかは測れない（一次データ無し）。段別カウントで見る
 
+## ⚠️ 本体追従が止まっている（2026-08-28 調査・**未着手**）
+
+**自動同期が 8/20 以降ずっとコンフリクトで停止している。** open な PR が2本あるが、**片方は賞味期限切れ**。
+
+| PR | 土台 | main から見た遅れ | 状態 |
+|---|---|---|---|
+| **#36** `chore/upstream-sync-20260827` | 8/27 午前 | **8コミット遅れ**（#38〜#45 = ウェビナー作業まるごと） | **賞味期限切れ。クローズ推奨** |
+| **#46** `upstream/update-20260828-033508` | 8/28 03:35 | **1コミット遅れ**（#45 = docs のみ） | **本命。コンフリクトマーカーが入ったまま** |
+
+### #36 は捨てる。ただし**本文は捨てない**
+
+#36 は手でコンフリクトを全解決し、検証も blind レビューも通した労作だが、
+**土台が 8/27 午前の main で、そこから #38〜#45（ウェビナー作業のほぼ全部）が入った**ので、
+そのままマージできない。**PR 本文に書かれた解決の判断表とバグ2件の記録は #46 でそのまま使える**ので、
+クローズする前に引き継ぐこと。
+
+**#36 が記録している「コンフリクトにならず自動マージが通ってしまったバグ」2件は、#46 でも再発しうる**:
+1. `serializeBroadcast` の `segmentConditions` 二重定義（upstream はオブジェクト化・フォークは生文字列。
+   管理画面 `apps/web/src/lib/api.ts` が `string | null` なので**フォーク版が正**）
+2. **セグメント条件付き全員配信のキック経路が `quotaEnv` を渡しておらず、月間送信上限を回避してしまう**
+   ← **本番の課金に直結**。`quotaEnv &&` の短絡で `isQuotaExceeded` がスキップされる
+
+### #46 のコンフリクト7ファイル（4つは #36 の判断がそのまま使える）
+
+| ファイル | #36 の判断 |
+|---|---|
+| `.gitignore` | フォークの `tasks/_review/` と upstream の `.claude/launch.json` を併存。`.dev.vars` の重複追記は採らない |
+| `apps/worker/src/index.ts` | `scheduled` を `scheduled.ts` へ切り出す upstream の構造変更を採用。**切り出し先から欠落するフォーク独自の webhook dedup cleanup (6h cron) を移植する** |
+| `apps/worker/src/routes/broadcasts.ts` | フォークの `hasSegmentConditions` と upstream の `parseJsonObject` を併存 |
+| `packages/db/bootstrap.sql` / `bootstrap-meta.json` | **生成物。手でマージせず `pnpm --dir packages/db generate:bootstrap` で再生成** |
+| `apps/worker/src/services/google-calendar.ts` | **#36 には無い新規**（#37 の複数カレンダー対応で触った） |
+| `apps/worker/src/routes/webinars.test.ts` | **#36 には無い新規**（ウェビナー作業で触った） |
+
+### migration の 070 重複は**破綻しない**（確認済み）
+
+upstream の `070_admin_sso_jti.sql` とフォークの `070_google_calendar_busy_calendars.sql` が並ぶ。
+**`_migrations` は `name TEXT PRIMARY KEY` で名前追跡**（`deploy-cloudflare-worker.yml:46`）なので、
+両方が辞書順に適用されるだけ。別テーブルなので順序の危険もない。
+**リネームしてはいけない**（適用済み DB の `_migrations` と齟齬が出る）。
+なお **F-11 の新 migration は 075 から**でよい。
+
+### 進め方（次に着手するときの型）
+
+**L 規模（169ファイル）× 危険 zone（migration・課金経路）** なので:
+1. #46 のブランチに **origin/main を取り込む**（#45 の docs 1件だけなので軽い）
+2. コンフリクト7ファイルを解決（上表の判断を使う）＋ bootstrap 再生成
+3. **#36 のバグ2件が再発していないか名指しで確認**（自動マージで通ってしまう種類のため）
+4. `pnpm --filter worker typecheck / test / build` ＋ `@line-crm/db test` を**自分で再実行**
+5. **squash せず merge commit で取り込む**（upstream の履歴を祖先に残さないと次回の merge-base が壊れる）
+6. マージ後に **#36 と draft #29〜#35 をクローズ**
+
 ## 何をしているか
 
 AI顧問アカウント（`tatsuki | AI顧問` @288pnjfn / accountId `db3ca401-29e5-4c36-9720-6fec783703ef`）で、
