@@ -955,6 +955,19 @@ function parseWebinarFollowupConfigPatch(
     patch.stageEnabledAt = now;
   }
 
+  if (body.noShowDelayMinutes !== undefined) {
+    const value = body.noShowDelayMinutes;
+    if (
+      typeof value !== 'number'
+      || !Number.isInteger(value)
+      || value <= 0
+      || value > 10080
+    ) {
+      return 'invalid_no_show_delay_minutes';
+    }
+    patch.noShowDelayMinutes = value;
+  }
+
   if (body.bookingUrl !== undefined) {
     if (body.bookingUrl !== null && typeof body.bookingUrl !== 'string') {
       return 'invalid_booking_url';

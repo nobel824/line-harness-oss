@@ -103,4 +103,23 @@ describe('webinar follow-up config helpers', () => {
     });
     expect(await getWebinarFollowupConfig(db, 'webinar-1')).toEqual(updated);
   });
+
+  test('noShowDelayMinutes は作成時と部分更新時に保存できる', async () => {
+    const db = asD1(sqlite);
+    const stageEnabledAt = '2026-08-28T12:34:56.000+09:00';
+    const created = await upsertWebinarFollowupConfig(db, 'webinar-1', {
+      noShowDelayMinutes: 90,
+      stageEnabledAt,
+    });
+
+    expect(created.no_show_delay_minutes).toBe(90);
+    expect(created.stage_enabled_at).toBe(stageEnabledAt);
+
+    const updated = await upsertWebinarFollowupConfig(db, 'webinar-1', {
+      noShowDelayMinutes: 120,
+    });
+
+    expect(updated.no_show_delay_minutes).toBe(120);
+    expect(updated.stage_enabled_at).toBe(stageEnabledAt);
+  });
 });

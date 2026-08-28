@@ -1293,6 +1293,70 @@ describe('admin CRUD', () => {
     );
   });
 
+  test('PUT /api/webinars/:id/followup-config — noShowDelayMinutes を保存する', async () => {
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    dbMocks.upsertWebinarFollowupConfig.mockResolvedValue(makeFollowupConfig({
+      no_show_delay_minutes: 120,
+    }));
+    const res = await reqAsStaff('/api/webinars/w1/followup-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noShowDelayMinutes: 120 }),
+    });
+    expect(res.status).toBe(200);
+    expect(dbMocks.upsertWebinarFollowupConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      'w1',
+      { noShowDelayMinutes: 120 },
+    );
+    expect(await res.json()).toMatchObject({
+      success: true,
+      data: { webinarId: 'w1', noShowDelayMinutes: 120 },
+    });
+  });
+
+  test('PUT /api/webinars/:id/followup-config — noShowDelayMinutes だけでは stageEnabledAt を変更しない', async () => {
+    const stageEnabledAt = '2026-08-01T00:00:00.000+09:00';
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    dbMocks.upsertWebinarFollowupConfig.mockResolvedValue(makeFollowupConfig({
+      no_show_delay_minutes: 120,
+      stage_enabled_at: stageEnabledAt,
+    }));
+    const res = await reqAsStaff('/api/webinars/w1/followup-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noShowDelayMinutes: 120 }),
+    });
+    expect(res.status).toBe(200);
+    expect(dbMocks.upsertWebinarFollowupConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      'w1',
+      { noShowDelayMinutes: 120 },
+    );
+    expect(await res.json()).toMatchObject({
+      success: true,
+      data: { stageEnabledAt, noShowDelayMinutes: 120 },
+    });
+  });
+
+  test.each([0, -1, 1.5, '120', 10081])(
+    'PUT /api/webinars/:id/followup-config — noShowDelayMinutes が不正なら 400 (%s)',
+    async (noShowDelayMinutes) => {
+      dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+      const res = await reqAsStaff('/api/webinars/w1/followup-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ noShowDelayMinutes }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        success: false,
+        error: 'invalid_no_show_delay_minutes',
+      });
+      expect(dbMocks.upsertWebinarFollowupConfig).not.toHaveBeenCalled();
+    },
+  );
+
   test('GET /api/webinars/:id/analytics — summary + trend + participants', async () => {
     dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
     dbMocks.getWebinarSessionStats.mockResolvedValue([
