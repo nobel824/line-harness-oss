@@ -106,7 +106,7 @@ function buildRegisteredNoShowText(
   if (lastPosition !== null && ctaAt !== null && lastPosition >= ctaAt) {
     return null;
   }
-  if (lastPosition !== null && ctaAt !== null && lastPosition < ctaAt && watch) {
+  if (lastPosition !== null && lastPosition > 0 && ctaAt !== null && lastPosition < ctaAt && watch) {
     return (
       `「${title}」の続きがまだ残っています。\n\n` +
       `いちばんお伝えしたいのは終盤です。\n` +

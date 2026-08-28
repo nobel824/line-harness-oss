@@ -155,6 +155,16 @@ describe('buildJourneyFollowupText', () => {
     expect(text).not.toContain('続きがまだ残っています');
   });
 
+  test('視聴位置が0秒の registered_no_show は未参加向け本文になる', () => {
+    const text = buildJourneyFollowupText(
+      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
+      { lastPositionSeconds: 0, formCtaAtSeconds: 2997, durationSeconds: 3420 },
+    );
+    expect(text).toContain('ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。');
+    expect(text).toContain(pickerUrl);
+    expect(text).not.toContain('続きがまだ残っています');
+  });
+
   test('CTA直前まで見た途中離脱者には続き案内を送り、停止位置は出さない', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
