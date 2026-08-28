@@ -22,6 +22,52 @@
 ハートビートは30秒間隔（`client/webinar/main.tsx:42`）なので、**30秒以内に離脱**したということ。
 追いかけ配信は途中位置から始まるので、遅刻入室者は頭から観られない。
 
+### 2026-08-28 深夜の作業（PR #57〜#61・すべてマージ＆デプロイ成功）
+
+| PR | 中身 |
+|---|---|
+| #58 | **ライブ前のアーカイブ告知を削除**（予約直後の受付確認・開始5分前リマインドの2箇所） |
+| #59 | **診断結果カードから本体の宣伝文を削除**（`routes/forms.ts`・**upstream 由来なので次回追従でコンフリクトしうる**） |
+| #60 | **回の予約を1人1件にする**（変更は差し替え） |
+| #61 | **`noShowDelayMinutes` を API から変更可能に**（書き込み経路が1つも無かった） |
+
+#### ユーザー決定（2026-08-28 深夜）
+
+- **ライブ前にアーカイブの存在を告知しない。** 参加する理由を自分で削っていた
+- **アーカイブは翌日に言う** → `noShowDelayMinutes` を **90 → 1380（翌19時）** に変更済み。
+  `stageEnabledAt` は `2026-08-27T20:26:47+09:00` のまま（`isActive` を送らなかったので打ち直されていない）
+- **希少性の文言は足さない。** アーカイブは実在するので「今日を逃すと見られません」は有利誤認
+- **回の変更はできてよい。ただし同時に複数の回を持たせない**
+
+#### 見つけた構造的欠陥: 「変更」が実は「追加」だった（#60 で修正）
+
+`webinar_registrations` の UNIQUE は **`(webinar_id, friend_id, session_start_at)`＝回ごと**で人ごとではない。
+`upsertWebinarRegistration` は名前に反して `INSERT OR IGNORE` するだけだった。
+**本番で既に発生**: `summary.reservations`（DISTINCT friend）**7人** に対し
+`journey.registrations`（COUNT(*)）**10行**。5分前リマインドは**登録行ごとに送る**ので課金も重複していた。
+
+**本番に残った重複3件は #60 では消えない**（本人が回を選び直した時点で集約される）。件数が小さいので手当てしていない。
+
+**集計の読み方**（今後の誤読防止）: `summary.reservations` は DISTINCT friend、
+`journey.registrations` は COUNT(*)、`daily.reservations` は日ごとの DISTINCT friend（日をまたぐと重複計上）。
+
+#### 相談予約は二重に取れない（確認済み・変更不要）
+
+`webinar-consultation-booking.ts:369` の conditional insert が
+「同じ friend×メニューで未来の `requested`/`confirmed` が無いこと」を条件にしているので競合してもすり抜けない。
+確定済みで Meet ありなら既存を返し（`created:false`）、それ以外は 409。
+**ウェビナー導線の中に変更・キャンセルの導線は無い**（汎用 LIFF 側に別経路のキャンセル API はあるが辿れない）。
+
+#### 触るときの注意（追加）
+
+- **`no_show_delay_minutes` 等の遅延分数は、#61 まで API から変更できなかった。**
+  いま変えられるのは `noShowDelayMinutes` だけで、`pickerDelayMinutes` /
+  `bookingDelayMinutes` / `bookingSecondDelayMinutes` / `firstDelayMinutes` / `secondDelayMinutes` は**依然として書き込み経路が無い**
+- `followup-config` の PUT で **`isActive` を送ると `stageEnabledAt` が現在時刻に打ち直される**
+  （`routes/webinars.ts:951`）。分数だけ変えたいときは `isActive` を送らないこと
+
+---
+
 ### 次のセッションの入口: **AC-5-3 が未達**（追客6通のうち2通が永久に沈黙している）
 
 **`webinar_followup_configs.booking_url` が null。** 候補SQLは
