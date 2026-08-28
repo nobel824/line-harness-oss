@@ -306,6 +306,23 @@ export async function getFormSubmissionsByFriend(
   return result.results;
 }
 
+export async function hasFriendSubmittedForm(
+  db: D1Database,
+  formId: string,
+  friendId: string,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `SELECT 1
+         FROM form_submissions
+        WHERE form_id = ? AND friend_id = ?
+        LIMIT 1`,
+    )
+    .bind(formId, friendId)
+    .first();
+  return result !== null;
+}
+
 export interface CreateFormSubmissionInput {
   formId: string;
   friendId?: string | null;

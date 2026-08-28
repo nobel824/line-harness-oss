@@ -46,6 +46,7 @@ interface FormDef {
   onSubmitMessageContent?: string | null;
   onSubmitWebhookFailMessage?: string | null;
   consultationWebinarSlug?: string | null;
+  alreadySubmitted?: boolean;
 }
 
 interface ConsultationSlot {
@@ -1480,6 +1481,11 @@ export async function initForm(formId: string | null): Promise<void> {
     }
 
     state.formDef = json.data;
+
+    if (json.data.consultationWebinarSlug && json.data.alreadySubmitted) {
+      await renderConsultationBooking(json.data.consultationWebinarSlug);
+      return;
+    }
 
     // Use only the trusted origin derived from the stored webhook. The raw
     // webhook path/query and secret headers never reach the browser.
