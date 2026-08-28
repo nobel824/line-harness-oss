@@ -122,6 +122,66 @@ booking_menu_id が非NULL の config` を辿って解決される（`routes/for
 **Grok が未確認と明記した点**: 本番 DB は叩いていない（「本番ウェビナーは `eec8dea0` の1件」「form CTA は 2997」は
 state.md の記録に依拠）。→ **これは PM が別途 API で実測済み・一致している。**
 
+### F. 着手前の未確認点はすべて解消した（2026-08-28・Grok コード調査）
+
+改訂ノート B / D が「着手時に確認」と残していた点を実コードで潰した。**v2 はこれを前提に書ける。**
+
+**F-1. LIFF URL の組み立て形式（B の未確認）**
+実体は `https://liff.line.me/<liffId>/?page=<page>&...&liffId=<liffId>`。
+`?page=form&id=<formId>` を追客本文に載せる**前例がある**（非公開関数 `formUrl` `webinar-followups.ts:63-67`、
+呼び出しは `after_30m` / `after_24h` の `:485-486`）。ピッカーは `webinarPickerUrl` `:70-74`。
+liffId の解決順は ①ウェビナーの `account_id` → `line_accounts.liff_id` ②`options.defaultLiffId`
+③cron が `env.LIFF_URL` から正規表現で抽出（`index.ts:1012-1017`）。どちらも無いと throw（`:484`）。
+→ **相談フォームのリンクは `formUrl` を流用すれば済む**（export されていないので同ファイルに置くか export する）。
+
+**F-2. 送信済みフォームの再オープン（B の未確認）**
+「送信済みです」ガードは**無い**。空フォームが再表示され、再送信すると `form_submissions` に**行が増える**
+（upsert ではない・`packages/db/src/forms.ts:315-328`。`(form_id, friend_id)` の UNIQUE は無い）。
+ただし送信後の相談枠画面は安全側に倒れている:
+既存予約が `confirmed` かつ `meetUrl` 有りなら「個別相談が確定しました」を出して終了し、枠選択に進まない
+（`client/form.ts:720-737, 766-781`）。サーバー側も `created:false` で既存を返す
+（`webinar-consultation-booking.ts:275-294`）。**二重予約にはならない。**
+唯一の穴は既存が `requested` 止まりのとき — 枠画面に進めてしまい、確定時に 409 `consultation_already_booked`。
+
+**F-3. 新 kind `archive_closing` の追加コスト（D-3 の確定）**
+`kind` の CHECK は `060_webinar_journey_followups.sql:37-42` の4値のみ。**SQLite は CHECK を ALTER できない**ので
+**テーブル作り直しの migration が要る**（＝危険 zone で確定。additive では済まない）。
+UNIQUE は `(webinar_id, friend_id, kind)`（`:50`）で **session を含まない**＝ D-4 のとおり v1 の AC-10-6 は誤り。
+`status` の CHECK は `pending|sent|failed|skipped`。
+候補SQLは `picker_no_registration` / `registered_no_show` が専用分岐で、**残り全部が else**
+（`webinar-followups.ts:341-390`）。専用 `if` を else の前に置かないと「相談未予約」の母数に吸い込まれる（D-5 確定）。
+`journeyDue` は4本を**順に await してスプレッド**（`:450-463`）＝ **1本が throw すると後続 kind が走らない**（D-6 確定）。
+送信ループ側（`:511-575`）は候補ごと try/catch なので、止まるのは候補取得の段階だけ。
+→ 最小の手当ては候補取得を `Promise.allSettled` か個別 try/catch にすること。
+段別カウントに出すには `isWebinarJourneyFollowupKind`（`packages/db/src/webinars.ts:447-453`）にも足す
+（ここに無い kind は集計から**黙って捨てられる**）。
+
+**F-4. セッション選択を `now + 3日` 以降にする（C-3）— 新しい落とし穴が1つ**
+生成は**サーバー1点**。`upcomingSessions` `services/webinar-schedule.ts:116-126` のフィルタ `s > nowEpochSeconds` を変えるだけ。
+**ただし `POST .../register` が同じ配列で受理判定している**（`webinars.ts:510-518`）ので、
+3日以内の回は予約 API が 400 `invalid_session` になる。C-3 の意図どおりなので整合はする。
+**落とし穴**: ピッカーの表示条件が `upcoming.length > 0`（`client/webinar/main.tsx:789`）。
+**upcoming が空になると、予約済みの人にも予約済みカードが出ず待機画面に落ちる。**
+先読みは `LOOKAHEAD_DAYS = 8`（`webinar-schedule.ts:6`）なので、週5回開催なら now+3日 でも3〜4件は残る計算だが、
+**8日先読みのまま3日切り捨てると残りが 5日分しかない**。要件で先読み日数を延ばすか、空のときの表示を決める。
+`upcomingSessions` の単体テストは**存在しない**。影響を受けるのは `routes/webinars.test.ts`（`256,273,301,392,421`）。
+入場リンクからの視聴とアーカイブ再生は `upcomingSessions` を使わないので影響なし。
+開始5分以内の「現在回」は別経路で足されるので now+3日 フィルタの外（`webinars.ts:325-327`）。
+
+**F-5. シナリオ変更の API（C-1 / C-2 / C-4）**
+`PUT /api/scenarios/:id/steps/:stepId`（`routes/scenarios.ts:411-574`）。stepId は `GET /api/scenarios/:id` から。
+body は camelCase・部分更新可。`absolute_time` は **`offsetDays` + `deliveryTime` のみ**許可で、
+`delayMinutes` / `offsetMinutes` を混ぜると 400（`validateStepSchedule:149-158`）。
+タグ条件は `conditionType` / `conditionValue` を **null にすれば無条件配信**になる
+（`step-delivery.ts:413-414` が `if (!step.condition_type) return true`）。
+**キー自体を省略すると既存条件が残る**ので、C-4 では明示的に null を送ること。
+
+**F-6. 本番 LIFF は worker 内蔵クライアントだけ（D-17 の解消）**
+`apps/worker/wrangler.toml:13-20` の `[assets]` で SPA を配信し、`?page=form` は `client/main.ts:702-705` が処理する。
+`apps/liff/` は Pages 用の旧実装で **form ルートを持たない**（未知 page を `/booking` に落とす）。
+→ **`page=form` を配信本文に載せて問題ない。** ただし Grok は「このユーザーの Cloudflare に apps/liff が今載っているかは
+repo からは未確認」と明記している。**旧 install 向けの Pages が生きている環境では同じ URL が予約画面に落ちる。**
+
 ### E. v2 を書くときの構成案
 
 - **F-9 を削除**し、「(c) の行き先 = `page=form&id=<相談フォームID>`（実装ゼロ）」を前提に格下げ
