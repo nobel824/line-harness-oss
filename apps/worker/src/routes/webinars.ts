@@ -501,7 +501,7 @@ webinarRoutes.post('/api/liff/webinars/:slug/comments', async (c) => {
 
 // セッション選択メニューの予約。sessionStartAt はスケジュール上の実在する
 // 未来セッションに加え、開始後5分以内だけ現在回も受理。
-// 冪等 (同一回の再予約は成功扱い)。
+// 冪等 (同一回の再予約は false を返し、受付確認を再送しない)。
 webinarRoutes.post('/api/liff/webinars/:slug/register', async (c) => {
   try {
     const auth = await resolveWebinarCaller(c, c.req.param('slug'));
@@ -526,7 +526,7 @@ webinarRoutes.post('/api/liff/webinars/:slug/register', async (c) => {
       return c.json({ error: 'invalid_session' }, 400);
     }
     const created = await upsertWebinarRegistration(
-      c.env.DB, webinar.id, auth.friendId, sessionStartAt,
+      c.env.DB, webinar.id, auth.friendId, sessionStartAt, now,
     );
     // LIFF の二重タップや通信再試行でも、同一予約の受付確認は1通だけ送る。
     if (created) {
