@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { resolveSession, parseScheduleRules } from './webinar-schedule.js';
+import {
+  REGISTRATION_LEAD_DAYS,
+  REGISTRATION_LEAD_SECONDS,
+  resolveSession,
+  parseScheduleRules,
+  upcomingSessions,
+} from './webinar-schedule.js';
 
 /** JST の日時 → epoch 秒 (JST = UTC+9 固定) */
 function jst(y: number, mo: number, d: number, h: number, mi = 0): number {
@@ -89,5 +95,45 @@ describe('parseScheduleRules', () => {
   test('スケジュール空なら常に待機・next null', () => {
     const s = resolveSession([], DUR, jst(2026, 7, 29, 20, 0));
     expect(s).toEqual({ live: false, sessionStartAt: null, offsetSeconds: null, nextSessionAt: null });
+  });
+});
+
+describe('upcomingSessions', () => {
+  const now = jst(2026, 8, 3, 12, 0); // 月曜12:00
+
+  function onceAt(epochSeconds: number) {
+    return parseScheduleRules(JSON.stringify([{
+      type: 'once',
+      at: new Date(epochSeconds * 1000).toISOString(),
+    }]));
+  }
+
+  test('リード時間の秒数は REGISTRATION_LEAD_DAYS から導出される', () => {
+    expect(REGISTRATION_LEAD_SECONDS).toBe(REGISTRATION_LEAD_DAYS * 24 * 60 * 60);
+  });
+
+  test('now+72時間ちょうどは含み、1秒手前は含まない', () => {
+    const boundary = now + REGISTRATION_LEAD_SECONDS;
+
+    expect(upcomingSessions(onceAt(boundary), DUR, now, 5)).toEqual([boundary]);
+    expect(upcomingSessions(onceAt(boundary - 1), DUR, now, 5)).toEqual([]);
+  });
+
+  test('週5回の20時設定では、月曜12時から3日後以降の木曜20時が先頭になる', () => {
+    const rules = parseScheduleRules('[{"type":"weekly","days":[1,2,3,4,5],"time":"20:00"}]');
+
+    expect(upcomingSessions(rules, DUR, now, 1)).toEqual([jst(2026, 8, 6, 20, 0)]);
+  });
+
+  test('月・水・金・土・日の週5回設定は3日切り捨て後も5件返す', () => {
+    const rules = parseScheduleRules('[{"type":"weekly","days":[1,3,5,6,0],"time":"20:00"}]');
+
+    expect(upcomingSessions(rules, DUR, now, 5)).toEqual([
+      jst(2026, 8, 7, 20, 0),
+      jst(2026, 8, 8, 20, 0),
+      jst(2026, 8, 9, 20, 0),
+      jst(2026, 8, 10, 20, 0),
+      jst(2026, 8, 12, 20, 0),
+    ]);
   });
 });
