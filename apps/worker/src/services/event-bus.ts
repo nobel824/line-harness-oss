@@ -14,7 +14,6 @@ import {
   applyScoring,
   getActiveAutomationsByEvent,
   createAutomationLog,
-  addTagToFriend,
   removeTagFromFriend,
   enrollFriendInScenario,
   jstNow,
@@ -237,9 +236,11 @@ async function executeAction(
   }
 
   switch (action.type) {
-    case 'add_tag':
-      await addTagToFriend(db, friendId!, action.params.tagId);
+    case 'add_tag': {
+      const { attachTagAndFireSideEffects } = await import('./friend-tag-attach.js');
+      await attachTagAndFireSideEffects(db, friendId!, action.params.tagId);
       break;
+    }
 
     case 'remove_tag':
       await removeTagFromFriend(db, friendId!, action.params.tagId);
