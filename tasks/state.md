@@ -1,10 +1,116 @@
 # state — 特典→オートウェビナー→無料相談 自動導線
 
-最終更新: 2026-08-29 10:20 / フェーズ: **状態機械監査を実施し、沈黙故障6件を塞いだ**（観測は時刻待ち）
+最終更新: 2026-08-29 12:30 / フェーズ: **#70 デプロイ着地。F7（automation の add_tag がシナリオを起動しない）を発見し修正中**
 
 ---
 
 # 📋 引き継ぎ（新セッションはここだけ読めば入れる）
+
+## -6. 2026-08-29 12:00〜 — #70 の着地確認と、F7 の発見
+
+### #70 のデプロイは着地した（ship 条件の実測）
+
+PR #70 は **11:59 JST に main へ squash merge**、`Deploy Cloudflare Worker` は **success**（12:04）。
+`origin/main` とローカルブランチの差分ゼロ。§-5 の ship 条件を本番で実測した:
+
+| 条件 | 実測 | 判定 |
+|---|---|---|
+| 1. `no_show_delay_minutes` < 2937 | **1380** | 余裕内 |
+| 2. 保存で `after_*` の待ち行列が捨てられる | `pending` **0 件** | 実害なし |
+| 4. `after_30m` の無限再試行 | `sent`/`failed`/`pending` すべて **0** | まだ死んでいる |
+| F1 の再送バースト | 全ステージ `failed` **0 件** | 起きない |
+
+**ship 条件 3（失効がログに残らない）は未着手のまま。** 次の入口の候補として生きている。
+
+### F7 — automation の `add_tag` が `tag_added` シナリオを起動しない（沈黙故障）
+
+§-5 が「打ち手はここ」と書いた **特典請求 48 → 案内クリック 12（25%）** を掘って出た。
+
+**`5202064a`（ウェビナー案内・翌日19時の再送）は一度も走っていない。**
+
+| 証拠 | 値 |
+|---|---|
+| `5202064a` の `enrolledTotal` | **0**（`is_active=true`・設定は正しい） |
+| 他の `tag_added` シナリオ2本 | どちらも **0** |
+| 対照群 `friend_add` の `913b65d8` | **1196** ＝ stats API は壊れていない |
+| automation `b3c926e8` の実行ログ | 2026-08-29 10:30 に `add_tag success` |
+
+**原因**: automation の `add_tag` は `event-bus.ts:241` で `addTagToFriend()`（`packages/db/src/tags.ts:77`）を
+呼ぶ。これは `friend_tags` への素の INSERT ＋ mileage enqueue だけで、**シナリオを enroll しない**。
+enroll するのは `services/friend-tag-attach.ts` の `attachTagAndFireSideEffects()` だけで、
+tracked-link / LIFF / フォーム / 予約 / ウェビナーはそちらを通っている。**automation だけが素通り。**
+
+automation `b3c926e8` の description には「このタグが翌日フォローのシナリオを起動する」と
+書いてある。**意図が明記されているのに動いていない**型。
+
+**同じ根でもう1本死んでいる**: `96c82bb0`（クラファン｜資料 →「7日ステップ開始」）→ `7ce4009e` も enrolled 0。
+
+**影響の正確な範囲**: 特典の応答2バブル目に案内 Flex（`/t/qFMW0SK`）は入っているので、
+48 人全員が1回は案内を見ている。**未クリックの 36 人が、設計上受け取るはずの翌日19時の再送を
+一度も受け取っていない。**
+
+### ユーザー裁定（2026-08-29 12:15）
+
+- **スコープは `event-bus.ts` の `add_tag` だけ。** `stripe.ts` / `step-delivery.ts` の
+  `on_reach_tag_id` / `duplicate-detect.ts` / `immediate-first-step.ts` の `addTagToFriend` は触らない
+- **既存 36 人のバックフィルはしない。** 今後の特典請求から効かせる。
+  `INSERT OR IGNORE` で `added=false` になるので既存タグ保持者が再 enroll されることは無い
+
+**バックフィルを見送った理由**: 再送本文が「**昨日**お送りした特典」と断定している。
+数日前の請求者に流すと、§-5 の F5 / F6 で塞いだのと同じ「事実と食い違う本文」になる。
+
+### 要件と実装
+
+要件書 `tasks/requirements-automation-add-tag-enrollment.md`。実装は **Codex luna max** に委譲、
+PM が差分と全テストを自分で実測して裏取り。
+
+**事前に潰した副作用3点**（要件書に全文）:
+1. **循環 import**: `friend-tag-attach.ts` → `event-bus.js`。static import は循環するので**動的 import** を使う
+2. **`tag_change` が新たに発火する**。本番の automation は3本とも `eventType = message_received` で
+   **`tag_change` の購読者はゼロ**。ただし将来 `tag_change` 起動の automation が `add_tag` を持つと
+   再帰しうる（同一タグなら `added=false` で1周で止まる）。**今回は塞いでいない**
+3. **`push` は渡さない**。配信は cron に任せ、`pushImmediateFirstStep` の判定に依存しない
+
+**PM が足したテスト3本**（Codex の5本には無かった）:
+
+| テスト | 何を守る | 変異させた結果 |
+|---|---|---|
+| **AC-6** | `trigger_tag_id` が違うシナリオを enroll しない | `=== tagId` を `true` に → AC-6 だけ FAIL |
+| **AC-7** | `trigger_type` が `tag_added` 以外を enroll しない | `=== 'tag_added'` を `true` に → AC-7 だけ FAIL |
+| **AC-5b** | token 付きでも即時 push しない | `event-bus.ts` を token 付き push に → AC-5b だけ FAIL |
+
+**新しいテストは必ず変異させて空振りでないか確かめること。** このプロジェクトは
+「29 tests あっても SQL を何も担保していなかった」前例がある。
+AC-5b の変異は **`pushImmediateFirstStep` の `vi.mock` が `friend-tag-attach.ts` の import に
+実際に刺さっていることの証明も兼ねる**（刺さっていなければ `not.toHaveBeenCalled()` は無条件に通る）。
+
+### レビュー結果 — fresh Sonnet（一次）＋ Grok 4.6（別家系）
+
+**致命は両者とも「無し」。** 裁定の全文は要件書の末尾。
+
+**修正した2件**（どちらも Grok の「テストが空振り」指摘）:
+- **AC-5 は token 無しの呼び出ししか見ていなかった。** 他経路（tracked-link / LIFF）は
+  token があるときだけ `push` を渡すので、同じ形に寄せる回帰は token 無しのテストを素通りする → AC-5b を追加
+- **`trigger_type` の判定を消しても全テストが通っていた** → AC-7 を追加
+
+**据え置いた1件**: `tag_change` の入れ子発火（両者が指摘）。
+**両レビュアーとも「本番 D1 を見ていないので購読者の有無は確認できない」と留保していた。PM が実測して埋めた**
+—— automation 3本すべて `message_received` / outgoing webhook **0** / 通知ルール **0** / スコアリング **0**。**現状 inert。**
+
+Grok の新規指摘として、**`remove_tag` のあと同一タグを `add_tag` すると
+`fireEvent('tag_change')` が深さ制限なしで再入する**（タグ行が消えて再 INSERT できるため。
+同一タグの連続 `add_tag` は `changes=0` で1周で止まるが、この組み合わせは止まらない）。
+**将来 `tag_change` 起動の automation を作るときの必須確認事項として要件書に記録した。**
+
+### レビュアーを回すときの罠（次も踏む）
+
+- **`claude -p --permission-mode plan` は最終回答を stdout に出さない。** ログが権限警告だけになる。
+  レビューに使うなら plan を外して `--tools Read,Glob,Grep` で絞る
+- **`&` でバックグラウンドに投げたレビュアーは、その Bash 呼び出しが返った時点で殺される。**
+  1エージェント＝1回の `run_in_background` 呼び出しにする
+- **`claude -p "$(cat file)"` は引数が長いと "Input must be provided" で落ちる。** stdin にパイプする
+
+---
 
 ## -5. 2026-08-29 午前 — 状態機械監査を実施。沈黙故障6件を塞いだ
 
