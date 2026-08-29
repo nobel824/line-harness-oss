@@ -710,4 +710,71 @@ describe('webinar follow-up candidate SQL', () => {
       withinWindowDb.close();
     }
   });
+
+  test('T11: submitted_no_booking_24h は送信予定時刻から24時間を過ぎると候補にしない', async () => {
+    const overdueDb = createSqlite();
+    updateConfig(overdueDb, { booking_delay_minutes: 9999 });
+    seedJourneyStage(overdueDb, 'submitted_no_booking_24h');
+    try {
+      const result = await processOn(overdueDb, '2026-08-12T18:01:00+09:00');
+      expect(result).toEqual({ sent: 0, failed: 0 });
+      expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
+    } finally {
+      overdueDb.close();
+    }
+
+    vi.clearAllMocks();
+    prepareDeliveryMocks();
+    const withinWindowDb = createSqlite();
+    updateConfig(withinWindowDb, { booking_delay_minutes: 9999 });
+    seedJourneyStage(withinWindowDb, 'submitted_no_booking_24h');
+    try {
+      const result = await processOn(withinWindowDb, '2026-08-11T18:01:00+09:00');
+      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
+    } finally {
+      withinWindowDb.close();
+    }
+  });
+
+  test('T12: after_24h は送信予定時刻から24時間を過ぎると候補にしない', async () => {
+    const ctaClickedAt = '2026-08-10T19:00:00+09:00';
+
+    const overdueDb = createSqlite();
+    updateConfig(overdueDb, { first_delay_minutes: 9999, second_delay_minutes: 1440 });
+    insertViewer(overdueDb, { ctaClickedAt });
+    insertCtaFollowup(overdueDb, 'after_30m', 'sent', ctaClickedAt, 'cta-overdue-first-sent');
+    try {
+      const result = await processOn(overdueDb, '2026-08-12T19:01:00+09:00');
+      expect(result).toEqual({ sent: 0, failed: 0 });
+      expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
+    } finally {
+      overdueDb.close();
+    }
+
+    vi.clearAllMocks();
+    prepareDeliveryMocks();
+    const withinWindowDb = createSqlite();
+    updateConfig(withinWindowDb, { first_delay_minutes: 9999, second_delay_minutes: 1440 });
+    insertViewer(withinWindowDb, { ctaClickedAt });
+    insertCtaFollowup(withinWindowDb, 'after_30m', 'sent', ctaClickedAt, 'cta-within-first-sent');
+    try {
+      const result = await processOn(withinWindowDb, '2026-08-11T19:01:00+09:00');
+      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
+    } finally {
+      withinWindowDb.close();
+    }
+  });
+
+  test('T13: after_24h はafter_30mがfailedなら候補にしない', async () => {
+    const ctaClickedAt = '2026-08-11T19:00:00+09:00';
+    updateConfig(sqlite, { first_delay_minutes: 9999, second_delay_minutes: 0 });
+    insertViewer(sqlite, { ctaClickedAt });
+    insertCtaFollowup(sqlite, 'after_30m', 'failed', ctaClickedAt);
+
+    const result = await processOn(sqlite, '2026-08-11T20:00:00+09:00');
+    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
+  });
 });

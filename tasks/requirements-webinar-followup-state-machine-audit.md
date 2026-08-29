@@ -177,3 +177,46 @@ F1 を入れる以上、上限を付けないと F1 自体が誤送信の経路�
 | T10 | `archive_closing`: 期限を過ぎたセッション → 0件（AC-E2）。期限の6時間前〜期限内 → 1件（AC-E3） |
 
 既存の T3（`submitted_no_booking_24h` を検証しているもの）は**消さずに名前を実態に合わせる**。
+
+---
+
+## 追記2（2026-08-29・一次レビュー後）
+
+### F6. 「昨日」と断定する2ステージに上限が無い（F5 と同じ理屈の見落とし）
+
+F5 は `archive_closing` だけを対象にしたが、**本文が時刻を断定するステージは他に2つある**。
+
+| ステージ | 本文（`webinar-followups.ts`） | 現状の上限 |
+|---|---|---|
+| `submitted_no_booking_24h` | 「**昨日**ご入力いただいた無料相談は…」（:224-230） | 無し |
+| `after_24h` | 「**昨日**ご案内した無料相談は…」（`buildCtaFollowupText`） | 無し |
+
+**`submitted_no_booking_24h`**: F1 で `failed` / `pending` を作成から24時間再試行するようにしたため、
+**送信成功が最大で送信予定時刻の24時間後までズレうる**。
+フォーム送信を T=0 とすると、T+24h に候補化 → 1通目の push が失敗 → `failed` のまま毎分再試行 →
+T+47h で成功、というとき **「おととい入力したフォーム」に「昨日ご入力いただいた」と書いて送る**。
+F1 導入前は失敗行が二度と再送されなかったので、この経路は存在しなかった。**F1 が作った経路。**
+
+**`after_24h`**: こちらは `webinar_followups` テーブルで、除外条件が元から `status = 'sent'` のみ
+（`webinar-followups.ts:295-299` 付近）＝ **`failed` は無期限に毎分再試行され続ける**。
+cron が数日止まって再開すると「昨日ご案内した」を1週間後に送る。**F1 以前からある穴。**
+
+**AC-F1**: `submitted_no_booking_24h` の候補SQLに上限を足す。
+`datetime(s.submitted_at, '+' || (cfg.booking_second_delay_minutes + 1440) || ' minutes') > datetime(?)`
+＝ **送信予定時刻から24時間を過ぎたら送らない**。
+**AC-F2**: `after_24h` の候補SQLに同じ上限を足す。
+`datetime(c.cta_clicked_at, '+' || (cfg.second_delay_minutes + 1440) || ' minutes') > datetime(?)`。
+**AC-F3**: `after_30m` / `submitted_no_booking_30m` / `picker_no_registration` /
+`registered_no_show` には上限を足さない（本文が時刻を断定していないため）。既存挙動を変えない。
+**AC-F4**: 送信予定時刻ちょうど〜+24時間未満は従来どおり候補になる。
+
+**設計判断**: 遅れて届くくらいなら送らないほうがよい。事実と食い違う本文を送るのは、
+0通で沈黙するより悪い（利用者から見て「何を見て言っているのか」が分からなくなる）。
+
+### 追加テスト
+
+| # | 固定すること |
+|---|---|
+| T11 | `submitted_no_booking_24h`: 送信予定時刻 +24h を過ぎたら 0件（AC-F1）。予定時刻直後は 1件（AC-F4） |
+| T12 | `after_24h`: 同上（AC-F2 / AC-F4） |
+| T13 | `after_24h`: `after_30m` の行はあるが `status` が `failed` → 0件（AC-C2 の字義どおりの負ケース。一次レビューで未検証と指摘） |

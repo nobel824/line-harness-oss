@@ -260,6 +260,12 @@ async function candidates(
            AND first_wf.kind = 'after_30m' AND first_wf.status = 'sent'
        )`
     : '';
+  const needsSecondCtaCutoff = kind === 'after_24h'
+    ? `AND datetime(
+         c.cta_clicked_at,
+         '+' || (cfg.second_delay_minutes + 1440) || ' minutes'
+       ) > datetime(?)`
+    : '';
   const { results } = await db.prepare(
     `WITH clicks AS (
        SELECT v.webinar_id, v.friend_id, MIN(v.cta_clicked_at) AS cta_clicked_at
@@ -291,6 +297,7 @@ async function candidates(
          WHERE wc.webinar_id = w.id AND fs.friend_id = c.friend_id
            AND datetime(fs.created_at) >= datetime(c.cta_clicked_at)
        )
+       ${needsSecondCtaCutoff}
        AND NOT EXISTS (
          SELECT 1 FROM webinar_followups wf
          WHERE wf.webinar_id = w.id AND wf.friend_id = c.friend_id
@@ -303,7 +310,11 @@ async function candidates(
        )
      ORDER BY datetime(c.cta_clicked_at) ASC
      LIMIT 50`,
-  ).bind(cutoff, kind).all<Candidate>();
+  ).bind(
+    cutoff,
+    ...(kind === 'after_24h' ? [cutoff] : []),
+    kind,
+  ).all<Candidate>();
   return results ?? [];
 }
 
@@ -525,6 +536,12 @@ async function journeyCandidates(
            AND first_jf.kind = 'submitted_no_booking_30m' AND first_jf.status = 'sent'
        )`
     : '';
+  const needsSecondBookingCutoff = kind === 'submitted_no_booking_24h'
+    ? `AND datetime(
+         s.submitted_at,
+         '+' || (cfg.booking_second_delay_minutes + 1440) || ' minutes'
+       ) > datetime(?)`
+    : '';
   const { results } = await db.prepare(
     `WITH submissions AS (
        SELECT wc.webinar_id, fs.friend_id, MIN(fs.created_at) AS submitted_at
@@ -544,6 +561,7 @@ async function journeyCandidates(
        ON cfg.webinar_id = w.id AND cfg.is_active = 1
      WHERE cfg.booking_menu_id IS NOT NULL AND cfg.booking_url IS NOT NULL
        AND datetime(s.submitted_at, '+' || cfg.${delayColumn} || ' minutes') <= datetime(?)
+       ${needsSecondBookingCutoff}
        AND NOT EXISTS (
          SELECT 1 FROM bookings b
          WHERE b.friend_id = s.friend_id AND b.menu_id = cfg.booking_menu_id
@@ -570,7 +588,12 @@ async function journeyCandidates(
        ${needsFirstFollowup}
      ORDER BY datetime(s.submitted_at) ASC
      LIMIT 50`,
-  ).bind(cutoff, kind, cutoff).all<JourneyCandidate>();
+  ).bind(
+    cutoff,
+    ...(kind === 'submitted_no_booking_24h' ? [cutoff] : []),
+    kind,
+    cutoff,
+  ).all<JourneyCandidate>();
   return results ?? [];
 }
 
