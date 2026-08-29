@@ -775,7 +775,7 @@ describe('processWebinarFollowups', () => {
             return this;
           },
           async all() {
-            if (sql.includes('WITH missed AS') && values[2] === 'registered_no_show') {
+            if (sql.includes('WITH missed AS') && values[3] === 'registered_no_show') {
               return { results: [candidate] };
             }
             return { results: [] };
@@ -837,7 +837,7 @@ describe('processWebinarFollowups', () => {
             return this;
           },
           async all() {
-            if (sql.includes('WITH missed AS') && values[2] === 'registered_no_show') {
+            if (sql.includes('WITH missed AS') && values[3] === 'registered_no_show') {
               return { results: [candidate] };
             }
             return { results: [] };

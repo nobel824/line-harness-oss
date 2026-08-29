@@ -136,3 +136,44 @@ T7 は `booking_url` が null で2ステージが数日沈黙した事故の再�
 - 既存 29 tests を壊さない
 - 変更は `apps/worker/src/services/webinar-followups.ts` と新規テスト、および既存テストの追随のみ
 - マイグレーションは追加しない（スキーマ変更なし）
+
+---
+
+## 追記（2026-08-29・実装1周目のレビュー後）
+
+### F3 は未実装だった（実装側の誤認）
+
+1周目の実装は「F3 の `after_30m` 送信済みゲートは既存実装済み」と報告したが、**誤り**。
+既存の `needsFirstFollowup`（`webinar-followups.ts:481-488`）は
+**`submitted_no_booking_24h` 用**であって、`after_24h` には効かない。
+`candidates()`（`after_30m` / `after_24h` の候補SQL）には今も
+`kind = 'after_30m' AND status = 'sent'` を要求する EXISTS が無い。
+
+同じ理由で、新規テストの `T3` も名前は `after_24h` だが中身は
+`submitted_no_booking_24h` を検証している。**AC-C1〜C3 は未達のまま。**
+
+### F5. `archive_closing` がアーカイブ期限を過ぎても発火しうる（新規）
+
+**現象**: `archive_closing` の候補SQLは下限（`>= 期限 − 6時間`）だけで**上限が無い**
+（`webinar-followups.ts:493-495` 付近）。本文は「本日 ◯◯ で閉じます」と断定する。
+
+- cron が数日止まった後に再開すると、**とっくに閉じたアーカイブについて「本日閉じます」と送る**
+- F1 で `failed` / `pending` を24時間再試行するようにしたため、
+  **push が失敗してから最大24時間後に再送**される。期限直前6時間の窓で失敗すると、
+  再送時には期限を過ぎている
+
+F1 を入れる以上、上限を付けないと F1 自体が誤送信の経路になる。
+
+**AC-E1**: `archive_closing` の候補SQLに上限を足す
+（`lr.session_start_at + w.duration_seconds + ARCHIVE_WINDOW_SECONDS > unixepoch(?)`）。
+**AC-E2**: アーカイブ期限を過ぎたセッションは、`webinar_journey_followups` に行が無くても候補に現れない。
+**AC-E3**: 期限内（期限の6時間前〜期限）は従来どおり候補になる。
+
+### 追加テスト
+
+| # | 固定すること |
+|---|---|
+| T3'（差し替え） | `after_24h`: クリックから24時間超・`after_30m` 未送信 → 0件（AC-C2）。`after_30m` が sent → 1件（AC-C3）。本文が `buildCtaFollowupText('after_24h')` のものであること |
+| T10 | `archive_closing`: 期限を過ぎたセッション → 0件（AC-E2）。期限の6時間前〜期限内 → 1件（AC-E3） |
+
+既存の T3（`submitted_no_booking_24h` を検証しているもの）は**消さずに名前を実態に合わせる**。

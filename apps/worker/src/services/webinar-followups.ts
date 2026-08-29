@@ -253,6 +253,13 @@ async function candidates(
   cutoff: string,
 ): Promise<Candidate[]> {
   const delayColumn = kind === 'after_30m' ? 'first_delay_minutes' : 'second_delay_minutes';
+  const needsFirstCtaFollowup = kind === 'after_24h'
+    ? `AND EXISTS (
+         SELECT 1 FROM webinar_followups first_wf
+         WHERE first_wf.webinar_id = w.id AND first_wf.friend_id = c.friend_id
+           AND first_wf.kind = 'after_30m' AND first_wf.status = 'sent'
+       )`
+    : '';
   const { results } = await db.prepare(
     `WITH clicks AS (
        SELECT v.webinar_id, v.friend_id, MIN(v.cta_clicked_at) AS cta_clicked_at
@@ -260,7 +267,9 @@ async function candidates(
        JOIN webinar_followup_configs click_cfg
          ON click_cfg.webinar_id = v.webinar_id AND click_cfg.is_active = 1
        WHERE v.cta_clicked_at IS NOT NULL
-         AND datetime(v.cta_clicked_at) >= datetime(click_cfg.enabled_at)
+         AND datetime(v.cta_clicked_at) >= datetime(
+           COALESCE(click_cfg.stage_enabled_at, click_cfg.enabled_at)
+         )
        GROUP BY v.webinar_id, v.friend_id
      )
      SELECT w.id AS webinar_id, w.account_id, c.friend_id, w.slug,
@@ -272,7 +281,9 @@ async function candidates(
      JOIN webinars w ON w.id = c.webinar_id
      JOIN friends f ON f.id = c.friend_id AND f.is_following = 1
      JOIN webinar_followup_configs cfg ON cfg.webinar_id = w.id AND cfg.is_active = 1
-     WHERE datetime(c.cta_clicked_at) >= datetime(cfg.enabled_at)
+     WHERE datetime(c.cta_clicked_at) >= datetime(
+         COALESCE(cfg.stage_enabled_at, cfg.enabled_at)
+       )
        AND datetime(c.cta_clicked_at, '+' || cfg.${delayColumn} || ' minutes') <= datetime(?)
        AND NOT EXISTS (
          SELECT 1 FROM form_submissions fs
@@ -285,6 +296,7 @@ async function candidates(
          WHERE wf.webinar_id = w.id AND wf.friend_id = c.friend_id
            AND wf.kind = ? AND wf.status = 'sent'
        )
+       ${needsFirstCtaFollowup}
        AND EXISTS (
          SELECT 1 FROM webinar_ctas wc
          WHERE wc.webinar_id = w.id AND wc.form_id IS NOT NULL
@@ -324,6 +336,7 @@ async function getOrCreateFollowup(
   )!;
 }
 
+// sent/skipped は永久に除外し、失敗・未完了は最初の24時間だけ同じ行を再試行する。
 async function journeyCandidates(
   db: D1Database,
   kind: WebinarJourneyFollowupKind,
@@ -352,10 +365,17 @@ async function journeyCandidates(
            SELECT 1 FROM webinar_journey_followups jf
            WHERE jf.webinar_id = p.webinar_id AND jf.friend_id = p.friend_id
              AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
          )
        ORDER BY datetime(p.opened_at) ASC
        LIMIT 50`,
-    ).bind(cutoff, kind).all<JourneyCandidate>();
+    ).bind(cutoff, kind, cutoff).all<JourneyCandidate>();
     return results ?? [];
   }
 
@@ -364,6 +384,7 @@ async function journeyCandidates(
       `WITH missed AS (
          SELECT r.webinar_id, r.friend_id, MAX(r.session_start_at) AS missed_session_at
          FROM webinar_registrations r
+         JOIN webinars w ON w.id = r.webinar_id
          JOIN webinar_followup_configs cfg
            ON cfg.webinar_id = r.webinar_id AND cfg.is_active = 1
          WHERE datetime(r.created_at) >= datetime(COALESCE(cfg.stage_enabled_at, cfg.enabled_at))
@@ -373,6 +394,8 @@ async function journeyCandidates(
              WHERE future.webinar_id = r.webinar_id AND future.friend_id = r.friend_id
                AND future.session_start_at > unixepoch(?)
            )
+           -- 遅延だけで判定すると配信中に追客が飛ぶため、回の終了後に限定する。
+           AND r.session_start_at + w.duration_seconds <= unixepoch(?)
            AND NOT EXISTS (
              SELECT 1 FROM webinar_viewers v
              WHERE v.webinar_id = r.webinar_id AND v.friend_id = r.friend_id
@@ -417,10 +440,17 @@ async function journeyCandidates(
            SELECT 1 FROM webinar_journey_followups jf
            WHERE jf.webinar_id = m.webinar_id AND jf.friend_id = m.friend_id
              AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
          )
        ORDER BY m.missed_session_at ASC
        LIMIT 50`,
-    ).bind(cutoff, cutoff, kind).all<JourneyCandidate>();
+    ).bind(cutoff, cutoff, cutoff, kind, cutoff).all<JourneyCandidate>();
     return results ?? [];
   }
 
@@ -458,6 +488,8 @@ async function journeyCandidates(
         AND v.session_start_at = lr.session_start_at
        WHERE lr.session_start_at + w.duration_seconds + ${ARCHIVE_WINDOW_SECONDS}
                - ${ARCHIVE_CLOSING_LEAD_SECONDS} <= unixepoch(?)
+         AND lr.session_start_at + w.duration_seconds + ${ARCHIVE_WINDOW_SECONDS}
+               > unixepoch(?)
          AND NOT EXISTS (
            SELECT 1 FROM webinar_viewers clicked
            WHERE clicked.webinar_id = lr.webinar_id
@@ -469,10 +501,17 @@ async function journeyCandidates(
            WHERE jf.webinar_id = lr.webinar_id
              AND jf.friend_id = lr.friend_id
              AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
          )
        ORDER BY lr.session_start_at ASC
        LIMIT 50`,
-    ).bind(cutoff, kind).all<JourneyCandidate>();
+    ).bind(cutoff, cutoff, kind, cutoff).all<JourneyCandidate>();
     return results ?? [];
   }
 
@@ -516,15 +555,22 @@ async function journeyCandidates(
          WHERE mc.friend_id = s.friend_id AND mc.status IN ('confirmed', 'completed')
            AND datetime(mc.created_at) >= datetime(s.submitted_at)
        )
-       AND NOT EXISTS (
-         SELECT 1 FROM webinar_journey_followups jf
-         WHERE jf.webinar_id = s.webinar_id AND jf.friend_id = s.friend_id
-           AND jf.kind = ?
-       )
+         AND NOT EXISTS (
+           SELECT 1 FROM webinar_journey_followups jf
+           WHERE jf.webinar_id = s.webinar_id AND jf.friend_id = s.friend_id
+             AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
+         )
        ${needsFirstFollowup}
      ORDER BY datetime(s.submitted_at) ASC
      LIMIT 50`,
-  ).bind(cutoff, kind).all<JourneyCandidate>();
+  ).bind(cutoff, kind, cutoff).all<JourneyCandidate>();
   return results ?? [];
 }
 
