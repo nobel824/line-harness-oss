@@ -1,10 +1,141 @@
 # state — 特典→オートウェビナー→無料相談 自動導線
 
-最終更新: 2026-08-30 17:00 / フェーズ: **F7 修正が本番稼働。次は「予期した no_show が飛んでいない」の調査**
+最終更新: 2026-08-30 18:40 / フェーズ: **no_show / archive_closing の「飛んでいない」は正常と判明。観測可能性を PR #73 に出したところ**
 
 ---
 
 # 📋 引き継ぎ（新セッションはここだけ読めば入れる）
+
+## -8. 2026-08-30 18:40 — 未解決①②は**両方とも正常**だった。観測可能性を PR #73 に出した。**次の入口はここ**
+
+### 未解決①②の答え — どちらも「対象者が構造的にゼロ」
+
+**§-7 の判定手順は前提を1つ落としていた。`REGISTRATION_LEAD_DAYS = 3`**
+（`apps/worker/src/services/webinar-schedule.ts:6`、#48 で入った）。
+**8/28 以降に予約した人は「予約日 + 3日」以降の回しか選べない。**
+
+#### ① `registered_no_show` が 8/29 19:00 に飛ばなかった理由
+
+- **`sent = 2` は 8/29 ではなく 8/28 21:30 に飛んだもの。** 当時 `noShowDelayMinutes` はまだ **90** で、
+  8/28 20:00 の回 + 90分 = 21:30 に一致する（§0 の「21:33 時点で sent 2」と整合）。
+  対象は tatsuki（0秒）とゆうじくん（60秒）。秀島亮は 3060秒 ≥ form CTA の 2997秒 なので `missed` から除外
+- delay を 1380 に変えた後も、この2人は `status='sent'` で恒久ブロックなので**再候補にならない**
+- **8/29 20:00 / 8/30 20:00 の回には予約者が1人もいない**（8/28 以降の予約は全部 8/31 以降の回、
+  8/26 以前の予約は `created_at >= stage_enabled_at` で対象外）
+
+→ **8/30 19:00 も飛ばない。それが正常。最初のノーショー判定は 9/1 19:00**（8/31 20:00 の回）。
+
+#### ② `archive_closing` が 8/30 16:57 に飛ばなかった理由
+
+候補は `webinar-followups.ts:470` の `latest_registrations`＝**friend ごとの MAX(session_start_at)**。
+**8/27 22:00 の回を「最新の予約」として持つ friend が存在しない**（tatsuki は 8/28 の回にも予約しており、
+さらに 8/27 に CTA をクリック済みなので `NOT EXISTS clicked` でも永久除外）。
+
+→ **実質の初弾は 8/31 14:57**（8/28 20:00 の回）。対象はゆうじくんと秀島亮（第3分岐の文面）。
+**期限計算のズレではない。**
+
+#### この調査から得た本当の結論
+
+**両方とも「壊れていない」と説明できたが、それはコードと集計からの推論で、本番DBでは裏が取れていない。**
+`GET /api/webinars/:id/analytics` は集計しか返さず、D1 への直接クエリも不可
+（`cloudflare-api-token` に D1 権限が無い。**権限追加はユーザー作業**）。
+**半日かけて「たぶん正常」までしか行けなかった。** これが ship 条件3／積み残し2 そのもの。
+
+### PR #73 — 追客が「0通」のときの説明可能性（**マージ前**）
+
+`tasks/requirements-webinar-followup-diagnostics.md` が要件。
+
+- cron のログを**常時1行**に（`sent+failed>0` の `if` を撤去）。7ステージの候補件数を載せる。
+  **候補SQLが失敗した kind は `0` ではなく `err`**（同じ `0` で出すと、塞ごうとしている沈黙故障を
+  ログの中に作り直すことになる）
+- **`GET /api/webinars/:id/followup-diagnostics`**（`?stage=` で1ステージだけも引ける）
+- `registrationsBySession`＝**予約の回別内訳**。今回の調査で最初に欲しかった数字
+- `[observability] enabled = true`（既定側と `[env.production]` の両方）
+
+| verdict | 意味 |
+|---|---|
+| `blocked_by_config` | 設定欠落でステージが丸ごと死んでいる（`booking_url` null の前例） |
+| `has_candidates` | 候補が立っている＝次の tick で送られる |
+| `undetermined` | 全ウェビナー横断の `LIMIT 50` に達し判定できない |
+| `suppressed` | 送信済み・恒久ブロックで消えた＝正常 |
+| `no_population` | 入口イベントがまだ誰にも起きていない＝正常 |
+| **`needs_investigation`** | **母集団>0・抑止行0・候補0＝説明がつかない。これが出ることが唯一の存在理由** |
+
+#### 設計判断（再提案しないこと）
+
+**母集団は候補SQLのコピーではなく「そのステージの入口イベントが起きた friend 数」という独立した数字。**
+候補SQLを直しても嘘にならず、**二重管理が構造的に発生しない。**
+
+設計アドバイザー（Fable 5）は「段階的な絞り込み件数を出し、実SQLとの不一致を drift フラグで自白させる」を
+提案したが**採らなかった**。7ステージ×5段を別に書くと候補SQLと二重管理になり、drift 検出はその症状への
+対処でしかない。**アドバイザーは提案者であって、その案を採らないのは正常な運用。**
+
+**候補SQLの WHERE / CTE / JOIN は1行も変えていない。** 診断は読み取り専用で、
+`processWebinarFollowups` の中には入れていない（Free プランの CPU 10ms 上限で cron が毎tick死んだ事故）。
+
+#### レビューと、PM が自分で見つけた欠陥
+
+一次レビュー（fresh Sonnet・blind）は**致命0・重要3件**。全件修正:
+
+1. **`candidatesTruncated` が verdict に反映されていなかった** — 全ウェビナー横断の `LIMIT 50` を
+   他ウェビナーが埋めると `candidates=0` になり `needs_investigation` が空振りする → `undetermined` を追加
+2. **母集団が `is_following` を見ておらず**、ブロックした友だちで警報が空振り → 7ステージすべて友だちに限定。
+   判定順も `suppressed` → `no_population` に変更
+3. `processWebinarFollowups().candidates` の値を実SQLで担保するテストが無かった
+
+**PM がレビュー前に自分で見つけた2件**（Codex の実装は要件どおりだったが要件に穴があった）:
+
+- **要件書が「候補>0 のときの verdict」を定義し忘れており、Codex がそこを `needs_investigation` で埋めていた。**
+  送信待ちの正常なステージが警報を出す＝**この機能の唯一の信号が空振りする**。`has_candidates` を追加
+- 候補SQL失敗が `0` と出ていた（上記）
+
+**教訓: 要件書に穴があると、実装者はそこを埋める。埋め方は要件に書いていないので当たり外れになる。**
+
+### 次の一手（優先度順）
+
+1. **PR #73 をマージ・デプロイし、本番で診断を叩く。**
+   `GET /api/webinars/eec8dea0-574e-411c-9417-2902b2cf980a/followup-diagnostics`
+   （`Authorization: Bearer $(secret get LINE_HARNESS_OWNER_API_KEY_AIKOMON)`）。
+   **`registered_no_show` の verdict が `suppressed` か `no_population` なら、上の推論が実測で裏取りされる。**
+   **`needs_investigation` が出たら、その場で原因を追う**（推論が間違っていたことになる）
+2. **観測タスク**: **8/31 14:57** `archive_closing` 初弾（ゆうじくん・秀島亮）／
+   **9/1 19:00** `registered_no_show`（8/31 20:00 の回）。
+   飛ばなかったら、今度は診断エンドポイントで理由が分かるはず
+3. **上流の漏れ（特典請求 67 → 案内クリック 17 = 25.4%）。** #71 で翌日19時の再送が効き始めるので、
+   まず `5202064a` の `enrolledTotal` が 0 から動くのを確認してから案内メッセージ側を見直す
+4. **抑止・失効の `skipped` 行化。** 候補SQLの WHERE で黙って消える対象を、理由コード付きの行として残す。
+   **候補SQLの意味論を変えるのでリスクの階層が違う。別 PR**（#73 の Out of scope）
+5. `tag_change` の入れ子発火（現状 inert・§-6）／既存36人のバックフィル（ユーザー裁定で見送り済み）
+
+### 2026-08-30 17:03 の実ファネル（16:55 から変化なし）
+
+| 段 | 人数 | 直前からの遷移率 |
+|---|---|---|
+| 特典請求 | 67 | — |
+| 案内クリック | 17 | **25.4%** ← 相変わらず最大の漏れ |
+| ピッカー表示 | 20 | 117.6% |
+| 予約 | 10 | 50.0% |
+| 視聴開始 | 3 | 30.0% |
+| フォーム送信 | 1 | 33.3% |
+
+追客は `picker_no_registration` sent 13 / `registered_no_show` sent 2 / 他は全ステージ 0。
+**`failed` / `pending` はどのステージも 0。** `stageEnabledAt` は `2026-08-27T20:26:47+09:00` のまま。
+
+### 踏んだ罠（次も踏む）
+
+- **`codex exec` に `--dangerously-bypass-approvals-and-sandbox` を付けると auto mode の classifier に
+  ブロックされる。** CLAUDE.md の起動コマンド（素の `codex exec -m gpt-5.6-luna -c model_reasoning_effort=max`）
+  なら通り、`workspace-write` サンドボックスで書き込みもできる
+- **`cd` を含む Bash 呼び出しのあと cwd が残る。** `apps/worker` に居るのに `apps/worker/...` を
+  指定して "No such file" になったり、repo ルートで `npx tsc --noEmit` を叩いて**ヘルプが出て
+  exit 1**（テストも 1429 ではなく 73 しか走らない）。**検証コマンドは毎回 `cd` を明示する**
+- **`scheduled-webinar-followups.test.ts` の `processWebinarFollowups` はモックされておらず実物が走る**
+  （`emptyDb` 経由）。`serviceMocks.processWebinarFollowups` はデッドコード。
+  **ここに「失敗したらこう出る」テストを足すときは、実物が失敗する DB を渡すこと**
+- `cloudflare-api-token` に **D1 権限が無い**（`/accounts` は通るが `/d1/database` は 10000 Authentication error）。
+  本番DBを読みたければユーザーにトークン権限の追加を依頼する
+
+---
 
 ## -7. 2026-08-30 17:00 — #71 マージ・デプロイ完了。**次の入口はここ**
 
