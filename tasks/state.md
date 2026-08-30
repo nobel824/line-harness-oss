@@ -1,10 +1,117 @@
 # state — 特典→オートウェビナー→無料相談 自動導線
 
-最終更新: 2026-08-30 18:40 / フェーズ: **no_show / archive_closing の「飛んでいない」は正常と判明。観測可能性を PR #73 に出したところ**
+最終更新: 2026-08-30 23:50 / フェーズ: **#73 マージ・デプロイ済み。本番で初回コール。verdict は7ステージ中5つが誤警報・2つが判定不能で、信号として使えないことが実測で確定**
 
 ---
 
 # 📋 引き継ぎ（新セッションはここだけ読めば入れる）
+
+## -9. 2026-08-30 23:50 — #73 をマージ・デプロイし、本番で初回コール。**verdict は使えない。数字は効いた。次の入口はここ**
+
+### やったこと
+
+1. **マージ前に別家系（Grok 4.6・blind）でグリル。** 一次レビュー（fresh Sonnet）は済んでいたので、
+   評価分離のため家系を変えた。**critical 1・major 1。観点2（本番副作用）・観点3（認証・バインド・入力検証）は無し**
+2. **#73 を squash merge（14:30 UTC）。`Deploy Cloudflare Worker` / `Worker CI` ともに success**
+3. **本番で `GET /api/webinars/eec8dea0.../followup-diagnostics` を初回コール**
+
+### 実測: **verdict は7ステージ中5つが誤警報・2つが判定不能。正しい信号は0**
+
+| ステージ | 候補 | 母集団 | rows.sent | verdict | 実際は |
+|---|---|---|---|---|---|
+| `after_30m` | 0 | 1 | 0 | **needs_investigation** | 誤警報（唯一のCTAクリック者がフォーム送信済み→正当に除外） |
+| `after_24h` | 0 | 1 | 0 | **needs_investigation** | 誤警報（同上＋`after_30m` sent が前提） |
+| `picker_no_registration` | 0 | 21 | 15 | suppressed | 判定不能（下記 critical） |
+| `registered_no_show` | 0 | 5 | 2 | suppressed | 判定不能（同上） |
+| `submitted_no_booking_30m` | 0 | 1 | 0 | **needs_investigation** | 誤警報（唯一の送信者 tatsuki が 8/27 22:53 に Meet 相談 confirmed→`NOT EXISTS meet_consultations` で正当に除外） |
+| `submitted_no_booking_24h` | 0 | 1 | 0 | **needs_investigation** | 誤警報（同上＋30m sent が前提） |
+| `archive_closing` | 0 | 5 | 0 | **needs_investigation** | 誤警報（クロージング窓がまだ開いていない。初弾は 8/31 14:57 の予定どおり） |
+
+**5件すべてを本番データで潰した。**予約は `GET /api/booking/admin/requests?accountId=...` が 0 件、
+Meet 相談は `GET /api/meet-consultations` に tatsuki の1件（confirmed・8/27 22:53 JST）。
+`stage_enabled_at` は 8/27 20:26 なので、その間にフォーム送信→相談予約をした流れで整合する。
+
+### 根本原因 — **警報は両方向に壊れている**
+
+**① 一度でも送ったステージでは `needs_investigation` が二度と鳴らない（Grok の critical・実コードで裏取り済み）**
+
+`getRowCounts`（`webinar-followup-diagnostics.ts:242,254`）は `webinar_id + kind` の**全期間集計**で、
+母集団SQLと違い `stage_enabled_at` で絞っていない。`verdictForStage:348` は
+`sent + skipped + permanentlyBlocked > 0` で即 `suppressed` を返す。
+→ **抑止行が1件でも残っていれば、その後に母集団が増えて候補SQLが壊れても `suppressed`。**
+本番では `picker_no_registration`（sent 15）と `registered_no_show`（sent 2）が既に恒久的にこの状態。
+
+**② 一度も送っていないステージでは、正常でも `needs_investigation` が鳴る（本番で実測）**
+
+**母集団は「入口イベントが起きた友だち数」で、候補SQLの WHERE を1つも織り込んでいない上位集合。**
+だから `母集団>0 かつ 候補0 かつ 抑止行0` は異常を意味しない。正当に候補を空にする条件が3種類ある:
+
+- **コンバージョン済み**（フォーム送信した／相談を予約した）
+- **まだ期限が来ていない**（`archive_closing` の窓、`no_show` の 1380 分）
+- **前段への依存**（`*_24h` は `*_30m` が sent であることが前提。母集団はこれを見ていない）
+
+**①と②は同じ根から出ている: 抑止の理由が行として残っていないので、`population` と
+`sent+skipped+blocked` を突き合わせられない。**素直な修正（`母集団 − 抑止行 > 0` で警報）は、
+母集団が上位集合である以上**定常的に誤警報する**（ピッカー開封 21 − 送信 15 = 6 は正常に予約した人）。
+
+→ **正しい修正は「抑止・失効の `skipped` 行化」（旧 次の一手 #4）しかない。**
+候補SQLの WHERE で黙って消える対象を、理由コード付きの行として残す。**これが今の最優先。**
+
+### それでも #73 は効いた — **`registrationsBySession` が §-8 の推論を1つ否定した**
+
+**§-8 の「8/29 20:00 / 8/30 20:00 の回には予約者が1人もいない」は誤りだった。**
+
+| 回(JST) | 予約者 | 終了 |
+|---|---|---|
+| 08/27 22:00 | 1 | 済 |
+| 08/28 20:00 | 4 | 済 |
+| **08/30 20:00** | **2** | **済** |
+| 08/31 20:00 | 2 | 未 |
+| 09/04 20:00 | 2 | 未 |
+| 09/05 20:00 | 3 | 未 |
+| 09/06 20:00 | 1 | 未 |
+| 09/07 20:00 | 1 | 未 |
+
+→ **次のノーショー判定は 9/1 19:00 ではなく 8/31 19:00**（8/30 20:00 の回 + 1380分）。**観測日を1日前倒し。**
+（母集団 5 と予約 7 の差は `COUNT(DISTINCT friend_id)`。tatsuki が 8/27 と 8/28 の両方に予約している）
+
+**教訓: 効いたのは verdict ではなく生の数字。** 判定を1語に丸める設計は、丸める根拠（抑止理由）が
+無いうちは早すぎた。#73 の PR 説明にあった「`needs_investigation` が出ることが唯一の存在理由」は
+**言い過ぎで、PR にコメントで訂正済み**。
+
+### PM が別途見つけた minor（未修正）
+
+`hasFormCta`（`webinar-followup-diagnostics.ts:270`）は `kind='form' AND form_id IS NOT NULL` を要求するが、
+`candidates()` の同等ゲート（`webinar-followups.ts:316`）は `form_id IS NOT NULL` だけ。
+`kind='url'` かつ `form_id` 付きの行があると `form_cta_missing` が誤って立ち `blocked_by_config` になる。
+`replaceWebinarCtas` は kind に応じた `form_id` の null 化をしないので構造的には作れる。実データでは未発生。
+
+### 却下した指摘
+
+Grok の「候補SQLの WHERE が main から変わっている」は**誤り**。`git diff origin/main...HEAD` 上、
+`webinar-followups.ts` の変更は export 化・戻り値型・件数記録のみで WHERE / CTE / JOIN は無変更
+（レビュアーが古いローカル main と比較していた）。**外部レビューの指摘は自分で裏を取ってから採る。**
+
+### 次の一手（優先度順・#73 後で組み替えた）
+
+1. **抑止・失効の `skipped` 行化。**候補SQLの WHERE で黙って消える対象を理由コード付きの行として残す。
+   **これができるまで verdict は信用しない**（上記①②の唯一の根治）。候補SQLの意味論を変えるので
+   リスク階層が違う＝単独 PR・fresh Opus max ゲート
+2. **観測タスク（日付を訂正済み）**: **8/31 14:57** `archive_closing` 初弾／
+   **8/31 19:00** `registered_no_show`（8/30 20:00 の回・**9/1 ではない**）。
+   飛んだかは verdict ではなく `rows.sent` と `registrationsBySession` で見る
+3. **上流の漏れ（特典請求 67 → 案内クリック 17 = 25.4%）。**#71 の翌日19時再送が効き始めたか、
+   `5202064a` の `enrolledTotal` が 0 から動くのを確認してから案内メッセージ側を見直す
+4. `tag_change` の入れ子発火（現状 inert・§-6）／既存36人のバックフィル（ユーザー裁定で見送り済み）
+
+### 踏んだ罠（次も踏む）
+
+- **`gh pr merge --delete-branch` は worktree だと `fatal: 'main' is already checked out` で失敗する。**
+  **マージ自体は成功している**ので、エラーを見てリトライしないこと（`gh pr view <n> --json state` で確認する）
+- **`/api/booking/admin/requests` は `accountId` 必須。**無いと `missing_account_id` が返る（200 で返るので
+  件数0と見分けがつかない）
+
+---
 
 ## -8. 2026-08-30 18:40 — 未解決①②は**両方とも正常**だった。観測可能性を PR #73 に出した。**次の入口はここ**
 
