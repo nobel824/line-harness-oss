@@ -428,7 +428,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(fixture.inserted).toHaveLength(1);
     expect(fixture.inserted[0].values[3]).toBe('archive_closing');
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
@@ -454,7 +454,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain(
       'https://liff.line.me/liff-1/?page=form&id=form-1&liffId=liff-1',
@@ -473,7 +473,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     const archiveSql = fixture.preparedSql.find((sql) => sql.includes('latest_registrations'));
     expect(archiveSql).toBeDefined();
@@ -519,7 +519,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('続きが見られるのは、本日 20:57 までです。');
     expect(messages[0].text).not.toContain('page=form');
@@ -547,7 +547,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     expect(fixture.inserted).toHaveLength(0);
     const archiveSql = fixture.preparedSql.find((sql) => sql.includes('latest_registrations'));
@@ -583,7 +583,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('参加する回を選ぶ');
@@ -615,7 +615,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 1 });
+    expect(result).toMatchObject({ sent: 1, failed: 1 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     expect(fixture.inserted).not.toContainEqual(
       expect.objectContaining({ values: expect.arrayContaining(['archive_closing']) }),
@@ -653,7 +653,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 4, failed: 0 });
+    expect(result).toMatchObject({ sent: 4, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(4);
     expect(fixture.preparedSql.filter((sql) => sql.includes('FROM webinar_picker_opens p'))).not.toHaveLength(0);
     expect(fixture.preparedSql.filter((sql) => sql.includes('WITH missed AS'))).not.toHaveLength(0);
@@ -709,7 +709,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(preparedSql.some((sql) =>
       sql.includes('JOIN friends f ON f.id = c.friend_id AND f.is_following = 1'),
     )).toBe(true);
@@ -806,7 +806,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     expect(updates).toContainEqual(expect.objectContaining({
       sql: expect.stringContaining("last_error = 'cta_reached'"),
@@ -868,7 +868,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('続きがまだ残っています');

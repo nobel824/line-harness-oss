@@ -171,9 +171,12 @@ export async function scheduled(
       defaultLiffId: liffMatch?.[1] ?? null,
       proxyDispatch: (request) => Promise.resolve(lineProxy.fetch(request, env, ctx)),
     });
-    if (result.sent + result.failed > 0) {
-      console.log(`[webinar-followups] sent=${result.sent} failed=${result.failed}`);
-    }
+    const candidateSummary = Object.entries(result.candidates)
+      .map(([kind, count]) => `${kind}=${count === null ? 'err' : count}`)
+      .join(',');
+    console.log(
+      `[webinar-followups] sent=${result.sent} failed=${result.failed} candidates=${candidateSummary}`,
+    );
   } catch (e) {
     console.error('webinar-followups error:', e);
   }

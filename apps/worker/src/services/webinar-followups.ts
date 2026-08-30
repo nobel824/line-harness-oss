@@ -18,13 +18,22 @@ export type WebinarFollowupOptions = {
   proxyDispatch?: HarnessProxyDispatch;
 };
 
-type FollowupKind = 'after_30m' | 'after_24h';
+export type WebinarFollowupKind = 'after_30m' | 'after_24h';
+type FollowupKind = WebinarFollowupKind;
 export type WebinarJourneyFollowupKind =
   | 'picker_no_registration'
   | 'registered_no_show'
   | 'submitted_no_booking_30m'
   | 'submitted_no_booking_24h'
   | 'archive_closing';
+
+export type WebinarFollowupProcessResult = {
+  sent: number;
+  failed: number;
+  // null は「候補SQLが失敗した」。0（候補なし）と同じ値で出すと、この機能が
+  // 塞ごうとしている「異常が無を装う」経路をログの中に作ってしまう。
+  candidates: Record<WebinarFollowupKind | WebinarJourneyFollowupKind, number | null>;
+};
 
 type Candidate = {
   webinar_id: string;
@@ -247,7 +256,7 @@ function buildCtaFollowupText(kind: FollowupKind, url: string): string {
         `ご案内はこれで最後です。`;
 }
 
-async function candidates(
+export async function candidates(
   db: D1Database,
   kind: FollowupKind,
   cutoff: string,
@@ -348,7 +357,7 @@ async function getOrCreateFollowup(
 }
 
 // sent/skipped は永久に除外し、失敗・未完了は最初の24時間だけ同じ行を再試行する。
-async function journeyCandidates(
+export async function journeyCandidates(
   db: D1Database,
   kind: WebinarJourneyFollowupKind,
   cutoff: string,
@@ -648,9 +657,18 @@ async function deliveryConfig(
 export async function processWebinarFollowups(
   db: D1Database,
   options: WebinarFollowupOptions,
-): Promise<{ sent: number; failed: number }> {
+): Promise<WebinarFollowupProcessResult> {
   const now = jstNow();
   const followupKinds = ['after_30m', 'after_24h'] as const;
+  const candidatesByKind: Record<WebinarFollowupKind | WebinarJourneyFollowupKind, number | null> = {
+    after_30m: 0,
+    after_24h: 0,
+    picker_no_registration: 0,
+    registered_no_show: 0,
+    submitted_no_booking_30m: 0,
+    submitted_no_booking_24h: 0,
+    archive_closing: 0,
+  };
   const followupResults = await Promise.allSettled(
     followupKinds.map((kind) => candidates(db, kind, now)),
   );
@@ -658,8 +676,10 @@ export async function processWebinarFollowups(
     const kind = followupKinds[index];
     if (result.status === 'rejected') {
       console.error('webinar followup candidate error:', kind, result.reason);
+      candidatesByKind[kind] = null;
       return [];
     }
+    candidatesByKind[kind] = result.value.length;
     return result.value.map((candidate) => ({ candidate, kind }));
   });
 
@@ -677,8 +697,10 @@ export async function processWebinarFollowups(
     const kind = journeyKinds[index];
     if (result.status === 'rejected') {
       console.error('webinar journey candidate error:', kind, result.reason);
+      candidatesByKind[kind] = null;
       return [];
     }
+    candidatesByKind[kind] = result.value.length;
     return result.value.map((candidate) => ({ candidate, kind }));
   });
   let sent = 0;
@@ -832,5 +854,5 @@ export async function processWebinarFollowups(
       failed++;
     }
   }
-  return { sent, failed };
+  return { sent, failed, candidates: candidatesByKind };
 }

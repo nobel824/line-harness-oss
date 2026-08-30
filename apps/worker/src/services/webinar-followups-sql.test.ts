@@ -307,7 +307,7 @@ function prepareDeliveryMocks() {
 async function processOn(
   sqlite: Database.Database,
   now = NOW,
-): Promise<{ sent: number; failed: number }> {
+): Promise<Awaited<ReturnType<typeof processWebinarFollowups>>> {
   dbMocks.jstNow.mockReturnValue(now);
   return processWebinarFollowups(asD1(sqlite), {
     proxyBaseUrl: 'https://proxy.example.com',
@@ -402,7 +402,7 @@ describe('webinar follow-up candidate SQL', () => {
         );
         try {
           const result = await processOn(scenarioDb);
-          expect(result, `${kind}/${scenario.status}/${scenario.createdAt}`).toEqual({
+          expect(result, `${kind}/${scenario.status}/${scenario.createdAt}`).toMatchObject({
             sent: scenario.expectedSent,
             failed: 0,
           });
@@ -420,7 +420,7 @@ describe('webinar follow-up candidate SQL', () => {
   test('T2: after_30m はform CTAから未送信だけを候補にする', async () => {
     insertViewer(sqlite, { ctaClickedAt: '2026-08-11T19:00:00+09:00' });
     let result = await processOn(sqlite);
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('入力の途中で止まっているようです。');
@@ -433,18 +433,26 @@ describe('webinar follow-up candidate SQL', () => {
     insertSubmission(submittedDb, '2026-08-11T19:30:00+09:00');
     try {
       result = await processOn(submittedDb);
-      expect(result).toEqual({ sent: 0, failed: 0 });
+      expect(result).toMatchObject({ sent: 0, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     } finally {
       submittedDb.close();
     }
   });
 
+  test('重要3: processWebinarFollowups の after_30m 候補件数は実SQLの戻り値を反映する', async () => {
+    insertViewer(sqlite, { ctaClickedAt: '2026-08-11T19:00:00+09:00' });
+
+    const result = await processOn(sqlite);
+
+    expect(result.candidates.after_30m).toBe(1);
+  });
+
   test('T3: submitted_no_booking_24h はsubmitted_no_booking_30m sent後だけ候補にする', async () => {
     updateConfig(sqlite, { booking_delay_minutes: 9999 });
     insertSubmission(sqlite, '2026-08-10T18:00:00+09:00');
     let result = await processOn(sqlite);
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
@@ -461,7 +469,7 @@ describe('webinar follow-up candidate SQL', () => {
     );
     try {
       result = await processOn(firstSentDb);
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
       const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
       expect(messages[0].text).toContain('昨日ご入力いただいた無料相談');
@@ -476,7 +484,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertViewer(sqlite, { ctaClickedAt });
 
     let result = await processOn(sqlite);
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
@@ -487,7 +495,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertCtaFollowup(firstSentDb, 'after_30m', 'sent', ctaClickedAt, 'cta-first-sent');
     try {
       result = await processOn(firstSentDb);
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
       const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
       expect(messages[0].text).toBe(
@@ -520,7 +528,7 @@ describe('webinar follow-up candidate SQL', () => {
       }
       try {
         const result = await processOn(beforeStageDb);
-        expect(result, `${kind} before stage_enabled_at`).toEqual({ sent: 0, failed: 0 });
+        expect(result, `${kind} before stage_enabled_at`).toMatchObject({ sent: 0, failed: 0 });
         expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
       } finally {
         beforeStageDb.close();
@@ -540,7 +548,7 @@ describe('webinar follow-up candidate SQL', () => {
       }
       try {
         const result = await processOn(fallbackDb);
-        expect(result, `${kind} fallback to enabled_at`).toEqual({ sent: 1, failed: 0 });
+        expect(result, `${kind} fallback to enabled_at`).toMatchObject({ sent: 1, failed: 0 });
         expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
       } finally {
         fallbackDb.close();
@@ -566,7 +574,7 @@ describe('webinar follow-up candidate SQL', () => {
       insertViewer(scenarioDb, { ctaClickedAt: '2026-08-11T19:00:00+09:00' });
       try {
         const result = await processOn(scenarioDb);
-        expect(result, kind).toEqual({ sent: 0, failed: 0 });
+        expect(result, kind).toMatchObject({ sent: 0, failed: 0 });
         expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
       } finally {
         scenarioDb.close();
@@ -579,7 +587,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertRegistration(beforeEndDb, '2026-08-11T19:00:00+09:00');
     try {
       const result = await processOn(beforeEndDb, '2026-08-11T19:30:00+09:00');
-      expect(result).toEqual({ sent: 0, failed: 0 });
+      expect(result).toMatchObject({ sent: 0, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     } finally {
       beforeEndDb.close();
@@ -591,7 +599,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertRegistration(afterEndDb, '2026-08-11T19:00:00+09:00');
     try {
       const result = await processOn(afterEndDb, NOW);
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     } finally {
       afterEndDb.close();
@@ -604,7 +612,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertRegistration(productionConfigDb, '2026-08-10T20:00:00+09:00');
     try {
       const result = await processOn(productionConfigDb, NOW);
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     } finally {
       productionConfigDb.close();
@@ -628,7 +636,7 @@ describe('webinar follow-up candidate SQL', () => {
       insertSubmission(scenarioDb, '2026-08-11T19:00:00+09:00');
       try {
         const result = await processOn(scenarioDb);
-        expect(result, JSON.stringify(scenario)).toEqual({
+        expect(result, JSON.stringify(scenario)).toMatchObject({
           sent: scenario.expectedSent,
           failed: 0,
         });
@@ -663,7 +671,7 @@ describe('webinar follow-up candidate SQL', () => {
       );
       try {
         const result = await processOn(scenarioDb);
-        expect(result, scenario.status).toEqual({ sent: scenario.expectedSent, failed: 0 });
+        expect(result, scenario.status).toMatchObject({ sent: scenario.expectedSent, failed: 0 });
         expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(scenario.expectedSent);
       } finally {
         scenarioDb.close();
@@ -679,7 +687,7 @@ describe('webinar follow-up candidate SQL', () => {
     ).run('picker-1', WEBINAR_ID, FRIEND_ID, '2026-08-11T19:00:00+09:00');
 
     const result = await processOn(sqlite);
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
   });
 
@@ -691,7 +699,7 @@ describe('webinar follow-up candidate SQL', () => {
     });
 
     let result = await processOn(sqlite);
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
@@ -704,7 +712,7 @@ describe('webinar follow-up candidate SQL', () => {
     });
     try {
       result = await processOn(withinWindowDb);
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     } finally {
       withinWindowDb.close();
@@ -717,7 +725,7 @@ describe('webinar follow-up candidate SQL', () => {
     seedJourneyStage(overdueDb, 'submitted_no_booking_24h');
     try {
       const result = await processOn(overdueDb, '2026-08-12T18:01:00+09:00');
-      expect(result).toEqual({ sent: 0, failed: 0 });
+      expect(result).toMatchObject({ sent: 0, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     } finally {
       overdueDb.close();
@@ -730,7 +738,7 @@ describe('webinar follow-up candidate SQL', () => {
     seedJourneyStage(withinWindowDb, 'submitted_no_booking_24h');
     try {
       const result = await processOn(withinWindowDb, '2026-08-11T18:01:00+09:00');
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     } finally {
       withinWindowDb.close();
@@ -746,7 +754,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertCtaFollowup(overdueDb, 'after_30m', 'sent', ctaClickedAt, 'cta-overdue-first-sent');
     try {
       const result = await processOn(overdueDb, '2026-08-12T19:01:00+09:00');
-      expect(result).toEqual({ sent: 0, failed: 0 });
+      expect(result).toMatchObject({ sent: 0, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     } finally {
       overdueDb.close();
@@ -760,7 +768,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertCtaFollowup(withinWindowDb, 'after_30m', 'sent', ctaClickedAt, 'cta-within-first-sent');
     try {
       const result = await processOn(withinWindowDb, '2026-08-11T19:01:00+09:00');
-      expect(result).toEqual({ sent: 1, failed: 0 });
+      expect(result).toMatchObject({ sent: 1, failed: 0 });
       expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     } finally {
       withinWindowDb.close();
@@ -774,7 +782,7 @@ describe('webinar follow-up candidate SQL', () => {
     insertCtaFollowup(sqlite, 'after_30m', 'failed', ctaClickedAt);
 
     const result = await processOn(sqlite, '2026-08-11T20:00:00+09:00');
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
   });
 });
