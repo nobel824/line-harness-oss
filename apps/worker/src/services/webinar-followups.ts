@@ -60,6 +60,7 @@ export type RegisteredNoShowWatch = {
   lastPositionSeconds: number | null;
   formCtaAtSeconds: number | null;
   durationSeconds: number;
+  admissionUrl: string | null;
 };
 
 export type ArchiveClosingWatch = RegisteredNoShowWatch & {
@@ -107,17 +108,23 @@ function buildRegisteredNoShowText(
     return null;
   }
   if (lastPosition !== null && lastPosition > 0 && ctaAt !== null && lastPosition < ctaAt && watch) {
+    const admissionLine = watch.admissionUrl
+      ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから続きをご覧いただけます👇\n${watch.admissionUrl}`
+      : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。`;
     return (
       `「${title}」の続きがまだ残っています。\n\n` +
       `いちばんお伝えしたいのは終盤です。\n` +
       `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
-      `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。\n\n` +
+      `${admissionLine}\n\n` +
       remainingWatchLine(watch.durationSeconds, lastPosition)
     );
   }
+  const admissionLine = watch?.admissionUrl
+    ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから見返せます👇\n${watch.admissionUrl}`
+    : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。`;
   return (
     `ご予約いただいた「${title}」の回にお会いできませんでした。\n\n` +
-    `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。\n\n` +
+    `${admissionLine}\n\n` +
     `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
     `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
     `※約57分です。カメラ・マイクは使いません。`
@@ -386,6 +393,7 @@ async function journeyCandidates(
        SELECT w.id AS webinar_id, w.account_id, m.friend_id, w.slug, w.title,
               w.duration_seconds, cfg.booking_url,
               datetime(m.missed_session_at, 'unixepoch') AS source_at,
+              m.missed_session_at AS session_start_at,
               (
                 SELECT v.last_position_seconds FROM webinar_viewers v
                 WHERE v.webinar_id = m.webinar_id AND v.friend_id = m.friend_id
@@ -677,14 +685,21 @@ export async function processWebinarFollowups(
         continue;
       }
       const delivery = await deliveryConfig(db, candidate.account_id, options);
-      if (!delivery.liffId) throw new Error('LIFF ID not configured');
-      const pickerUrl = webinarPickerUrl(delivery.liffId, candidate.slug);
+      const liffId = delivery.liffId;
+      if (!liffId) throw new Error('LIFF ID not configured');
+      const pickerUrl = webinarPickerUrl(liffId, candidate.slug);
       const watch = kind === 'registered_no_show'
-        ? {
-            lastPositionSeconds: candidate.last_position_seconds ?? null,
-            formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
-            durationSeconds: candidate.duration_seconds ?? 0,
-          }
+        ? (() => {
+            const sessionStartAt = candidate.session_start_at ?? null;
+            return {
+              lastPositionSeconds: candidate.last_position_seconds ?? null,
+              formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
+              durationSeconds: candidate.duration_seconds ?? 0,
+              admissionUrl: sessionStartAt === null
+                ? null
+                : buildWebinarUrl(liffId, candidate.slug, sessionStartAt),
+            };
+          })()
         : kind === 'archive_closing'
           ? (() => {
               if (candidate.session_start_at === null || candidate.session_start_at === undefined) {
@@ -698,12 +713,12 @@ export async function processWebinarFollowups(
                 sessionStartAt: candidate.session_start_at,
                 formId,
                 admissionUrl: buildWebinarUrl(
-                  delivery.liffId,
+                  liffId,
                   candidate.slug,
                   candidate.session_start_at,
                 ),
                 pickerUrl,
-                consultationUrl: formId ? formUrl(delivery.liffId, formId) : null,
+                consultationUrl: formId ? formUrl(liffId, formId) : null,
               };
             })()
           : undefined;

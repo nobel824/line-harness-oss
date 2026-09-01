@@ -147,7 +147,12 @@ describe('buildJourneyFollowupText', () => {
   test('webinar_viewers に行が無い未視聴者はアーカイブ案内の本文になる', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: null, formCtaAtSeconds: 2997, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: null,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toContain('ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。');
     expect(text).toContain('お送りした入場リンクから、配信のあと3日間は見返せます。');
@@ -158,17 +163,95 @@ describe('buildJourneyFollowupText', () => {
   test('視聴位置が0秒の registered_no_show は未参加向け本文になる', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: 0, formCtaAtSeconds: 2997, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: 0,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toContain('ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。');
     expect(text).toContain(pickerUrl);
     expect(text).not.toContain('続きがまだ残っています');
   });
 
+  test('AC-5: 途中離脱の registered_no_show は admissionUrl 付きの続き案内になる', () => {
+    const admissionUrl = 'https://example.com/admission';
+    const text = buildJourneyFollowupText(
+      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
+      {
+        lastPositionSeconds: 1800,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl,
+      },
+    );
+
+    expect(text).toContain(`配信のあと3日間は、こちらから続きをご覧いただけます👇\n${admissionUrl}`);
+    expect(text).not.toContain('お送りした入場リンクから');
+  });
+
+  test('AC-5: 未参加の registered_no_show は admissionUrl 付きの見返し案内になる', () => {
+    const admissionUrl = 'https://example.com/admission';
+    const text = buildJourneyFollowupText(
+      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
+      {
+        lastPositionSeconds: 0,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl,
+      },
+    );
+
+    expect(text).toContain(`配信のあと3日間は、こちらから見返せます👇\n${admissionUrl}`);
+    expect(text).not.toContain('お送りした入場リンクから');
+  });
+
+  test('AC-6: admissionUrl が null のときは現行の本文をそのまま使う', () => {
+    const continued = buildJourneyFollowupText(
+      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
+      {
+        lastPositionSeconds: 1800,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
+    );
+    const noShow = buildJourneyFollowupText(
+      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
+      {
+        lastPositionSeconds: 0,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
+    );
+
+    expect(continued).toBe(
+      `「AI導入ライブ」の続きがまだ残っています。\n\n` +
+      `いちばんお伝えしたいのは終盤です。\n` +
+      `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
+      `お送りした入場リンクから、配信のあと3日間は続きをご覧いただけます。\n\n` +
+      `※残りは約27分です。`,
+    );
+    expect(noShow).toBe(
+      `ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。\n\n` +
+      `お送りした入場リンクから、配信のあと3日間は見返せます。\n\n` +
+      `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
+      `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
+      `※約57分です。カメラ・マイクは使いません。`,
+    );
+  });
+
   test('CTA直前まで見た途中離脱者には続き案内を送り、停止位置は出さない', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: 2996, formCtaAtSeconds: 2997, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: 2996,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toContain('「AI導入ライブ」の続きがまだ残っています。');
     expect(text).toContain('お送りした入場リンクから、配信のあと3日間は続きをご覧いただけます。');
@@ -181,7 +264,12 @@ describe('buildJourneyFollowupText', () => {
   test('CTAちょうどに到達した視聴者には registered_no_show を送らない', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: 2997, formCtaAtSeconds: 2997, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: 2997,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toBeNull();
   });
@@ -189,7 +277,12 @@ describe('buildJourneyFollowupText', () => {
   test('CTAを1秒超えた視聴者にも registered_no_show を送らない', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: 2998, formCtaAtSeconds: 2997, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: 2998,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toBeNull();
   });
@@ -197,7 +290,12 @@ describe('buildJourneyFollowupText', () => {
   test('form CTA が無いウェビナーは視聴していても未視聴と同じ本文になる', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: 1200, formCtaAtSeconds: null, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: 1200,
+        formCtaAtSeconds: null,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toContain('ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。');
     expect(text).toContain('お送りした入場リンクから、配信のあと3日間は見返せます。');
@@ -208,7 +306,12 @@ describe('buildJourneyFollowupText', () => {
   test('残り1分未満の途中離脱者は「あと少し」と出す', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      { lastPositionSeconds: 3370, formCtaAtSeconds: 3400, durationSeconds: 3420 },
+      {
+        lastPositionSeconds: 3370,
+        formCtaAtSeconds: 3400,
+        durationSeconds: 3420,
+        admissionUrl: null,
+      },
     );
     expect(text).toContain('※残りはあと少しです。');
     expect(text).not.toContain('3370');
@@ -690,6 +793,7 @@ describe('processWebinarFollowups', () => {
     expect(noShowSql).toContain("wc.kind = 'form'");
     expect(noShowSql).toContain('MIN(wc.at_seconds)');
     expect(noShowSql).toContain('last_position_seconds');
+    expect(noShowSql).toContain('m.missed_session_at AS session_start_at');
     expect(noShowSql).not.toContain('2997');
     // form CTA が無いウェビナーでは MIN() が NULL になり、比較が NULL に評価されて
     // 「視聴済みなのに除外されない」= 完走者に no_show が飛ぶ。COALESCE を外すと
@@ -771,6 +875,7 @@ describe('processWebinarFollowups', () => {
       duration_seconds: 3420,
       last_position_seconds: 1800,
       form_cta_at_seconds: 2997,
+      session_start_at: ARCHIVE_SESSION_START,
     };
     const db = {
       prepare(sql: string) {
@@ -816,6 +921,9 @@ describe('processWebinarFollowups', () => {
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('続きがまだ残っています');
+    expect(messages[0].text).toContain(
+      `https://liff.line.me/liff-1/?page=webinar&slug=demo&sessionStartAt=${ARCHIVE_SESSION_START}&liffId=liff-1`,
+    );
     expect(messages[0].text).not.toContain('1800');
   });
 });
