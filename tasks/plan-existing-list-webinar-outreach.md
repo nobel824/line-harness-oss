@@ -223,9 +223,18 @@ A/Bテスト機能は使えず（下限5,000）、n=100〜200では**相談申�
    `submitted_no_booking_30m/_24h` は解禁済み
 2. ~~相談枠の単体ディープリンク `page=consult` を実装~~ → **却下**。
    `page=form` の入口分岐（#63）で実装ゼロで済むと判明し、新設しないことになった
-3. **CTA到達の穴を塞ぐ ← 現在の最優先。** 49:57 は録画が口頭で確定させた時刻なので動かせない
-   （`2026-0827-the-script-promises-what-the-recording-must-honor`）。代わりに
-   ① 視聴画面に常時表示の控えめな相談リンク ② `registered_no_show` に `admissionUrl` を本文へ入れる
+3. ~~**CTA到達の穴を塞ぐ**~~ → **2026-09-01 実装済み（未デプロイ）**。49:57 は録画が口頭で
+   確定させた時刻なので動かせない（`2026-0827-the-script-promises-what-the-recording-must-honor`）。
+   代わりに ① 視聴画面の動画直下に常時表示の控えめな相談リンク（遷移先は既存 form CTA と同一・
+   ボトムシートで開くので動画から離れない・本CTAが出たら消える）② `registered_no_show` の本文に
+   `admissionUrl` を入れた（従来は「お送りした入場リンクから」と書きながらリンクが無く、
+   LINE のトーク履歴を遡らせる設計だった）。
+   **分析タブの読み方が1つ変わる**: 常時リンクは `/cta-click` を叩かない（`cta_clicks` は
+   `webinar_viewers.cta_clicked_at` 由来なので、叩くと「49:57 に到達して押した人」の指標が壊れる）。
+   一方でフォーム開封は通常どおり記録するので、**`form_opens` が `cta_impressions` /
+   `cta_clicks` を上回る**（ファネルが単調でなくなる）。**これはバグではなく、
+   常時リンクが効いている証拠**。差し引きの内訳は `webinar_funnel_events` を
+   `event_type='form_open' AND field_name='persistent_link'` で引くと出る（管理画面には出ない）
 4. **予約スタッフのシフト残期間と Google カレンダー共有を確認**（13週分しか無く、切れると枠が黙って消える。
    空き枠が 41 → 37 に減っている状態が正常の証拠）
 5. **S1（熱源30人）を抽出**。`chats.last_message_at` で S2/S3 のタグも同時に作る
