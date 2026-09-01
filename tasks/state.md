@@ -124,8 +124,14 @@ vault `2026-0827-the-script-promises-what-the-recording-must-honor` — 録画�
 
 ### 裁定済み（2026-09-01 16:40 — ユーザーが「任せます」で PM に委任）
 
-1. **分析からの内部アカウント除外 → A（`friends.is_internal`）。**
-   要件書 `tasks/requirements-analytics-internal-exclusion.md`。**Codex luna max に委譲済み・実装進行中。**
+1. **分析からの内部アカウント除外 → A（`friends.is_internal`）。実装コミット済み `4548408`（migration 078）。**
+   要件書 `tasks/requirements-analytics-internal-exclusion.md`。**未マージ・未デプロイ・最終ゲート未通過。**
+   検証実測（PM が実行。**Codex はテストを走らせていない**——worktree に依存が無く vitest が動かなかった）:
+   `packages/db` 205 passed / 変更に関係する worker 4ファイル 134 passed / 送信側の本体は未変更を diff で確認。
+   worker 全体では16ファイル失敗するが、**全て `@line-harness/update-engine` 等の未ビルドによる
+   import 解決エラーで今回の変更とは無関係**（affiliate / liff / cors 系）。
+   **worktree では `pnpm install` と `packages/shared` のビルドを先にやらないとテストが動かない。**
+   **AC-3（管理画面）だけは DOM テスト基盤が無く自動テストなし＝実機確認が要る。**
    管理画面は初期表示が除外済み＋「内部アカウントを含める」で全件に戻せる。
    **送信側（followups / reminders）は担当範囲外として明示的に禁止**し、AC-4 でテスト担保させている。
 2. **追客の除外条件 → A。** `webinar-followups.ts:427` の CTA 秒数による足切りを撤廃し、
