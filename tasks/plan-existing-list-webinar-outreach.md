@@ -217,11 +217,13 @@ A/Bテスト機能は使えず（下限5,000）、n=100〜200では**相談申�
 
 ## ⑩ 今週やること
 
-1. `PUT /api/webinars/:id/followup-config` で `bookingUrl` に相談フォームの LIFF URL を入れる
-   （`submitted_no_booking_30m/_24h` が解禁）。**`isActive` は送らない**
-   （`stageEnabledAt` が打ち直され、過去の離脱者にバースト送信される既知の罠）
-2. **相談枠の単体ディープリンク `page=consult` を実装**（8/28決着済みの残タスク）
-3. **CTA到達の穴を塞ぐ。** 49:57 は録画が口頭で確定させた時刻なので動かせない
+1. ~~`bookingUrl` に相談フォームの LIFF URL を入れる~~ → **2026-09-01 完了を確認**。
+   本番の `followup-config` は `bookingUrl` に `page=form&id=95a1355f-...` が入り、`isActive: true`、
+   `stageEnabledAt` は `2026-08-27T20:26:47+09:00` のまま（打ち直されていない）。
+   `submitted_no_booking_30m/_24h` は解禁済み
+2. ~~相談枠の単体ディープリンク `page=consult` を実装~~ → **却下**。
+   `page=form` の入口分岐（#63）で実装ゼロで済むと判明し、新設しないことになった
+3. **CTA到達の穴を塞ぐ ← 現在の最優先。** 49:57 は録画が口頭で確定させた時刻なので動かせない
    （`2026-0827-the-script-promises-what-the-recording-must-honor`）。代わりに
    ① 視聴画面に常時表示の控えめな相談リンク ② `registered_no_show` に `admissionUrl` を本文へ入れる
 4. **予約スタッフのシフト残期間と Google カレンダー共有を確認**（13週分しか無く、切れると枠が黙って消える。
