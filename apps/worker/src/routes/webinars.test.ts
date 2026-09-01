@@ -65,6 +65,20 @@ const consultationMock = {
 };
 vi.mock('../services/webinar-consultation-booking.js', () => consultationMock);
 
+const diagnosticsMock = {
+  getWebinarFollowupDiagnostics: vi.fn(),
+  isWebinarFollowupDiagnosticStage: (value: string) => [
+    'after_30m',
+    'after_24h',
+    'picker_no_registration',
+    'registered_no_show',
+    'submitted_no_booking_30m',
+    'submitted_no_booking_24h',
+    'archive_closing',
+  ].includes(value),
+};
+vi.mock('../services/webinar-followup-diagnostics.js', () => diagnosticsMock);
+
 const { webinarRoutes, ARCHIVE_WINDOW_SECONDS } = await import('./webinars.js');
 const { signWebinarToken } = await import('../lib/webinar-token.js');
 const { REGISTRATION_LEAD_SECONDS } = await import('../services/webinar-schedule.js');
@@ -1223,6 +1237,35 @@ describe('admin CRUD', () => {
       success: true,
       data: { webinarId: 'w1', adminNotifyLineUserId: 'UADMIN' },
     });
+  });
+
+  test('GET /api/webinars/:id/followup-diagnostics — stage を診断サービスへ渡す', async () => {
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    const data = {
+      config: null,
+      stages: {
+        registered_no_show: {
+          candidates: 0,
+          candidatesTruncated: false,
+          population: 0,
+          rows: { sent: 0, skipped: 0, failed: 0, pending: 0, permanentlyBlocked: 0 },
+          blockers: [],
+          verdict: 'no_population',
+        },
+      },
+      registrationsBySession: [],
+    };
+    diagnosticsMock.getWebinarFollowupDiagnostics.mockResolvedValue(data);
+
+    const res = await req('/api/webinars/w1/followup-diagnostics?stage=registered_no_show');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, data });
+    expect(diagnosticsMock.getWebinarFollowupDiagnostics).toHaveBeenCalledWith(
+      expect.anything(),
+      'w1',
+      { stage: 'registered_no_show' },
+    );
   });
 
   test('PUT /api/webinars/:id/followup-config — isActive と stageEnabledAt: now を同時に更新する', async () => {

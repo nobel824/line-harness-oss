@@ -18,13 +18,22 @@ export type WebinarFollowupOptions = {
   proxyDispatch?: HarnessProxyDispatch;
 };
 
-type FollowupKind = 'after_30m' | 'after_24h';
+export type WebinarFollowupKind = 'after_30m' | 'after_24h';
+type FollowupKind = WebinarFollowupKind;
 export type WebinarJourneyFollowupKind =
   | 'picker_no_registration'
   | 'registered_no_show'
   | 'submitted_no_booking_30m'
   | 'submitted_no_booking_24h'
   | 'archive_closing';
+
+export type WebinarFollowupProcessResult = {
+  sent: number;
+  failed: number;
+  // null は「候補SQLが失敗した」。0（候補なし）と同じ値で出すと、この機能が
+  // 塞ごうとしている「異常が無を装う」経路をログの中に作ってしまう。
+  candidates: Record<WebinarFollowupKind | WebinarJourneyFollowupKind, number | null>;
+};
 
 type Candidate = {
   webinar_id: string;
@@ -108,23 +117,23 @@ function buildRegisteredNoShowText(
     return null;
   }
   if (lastPosition !== null && lastPosition > 0 && ctaAt !== null && lastPosition < ctaAt && watch) {
-    const admissionLine = watch.admissionUrl
-      ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから続きをご覧いただけます👇\n${watch.admissionUrl}`
-      : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。`;
     return (
       `「${title}」の続きがまだ残っています。\n\n` +
       `いちばんお伝えしたいのは終盤です。\n` +
       `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
-      `${admissionLine}\n\n` +
+      (watch.admissionUrl
+        ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから続きをご覧いただけます👇\n` +
+          `${watch.admissionUrl}\n\n`
+        : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は続きをご覧いただけます。\n\n`) +
       remainingWatchLine(watch.durationSeconds, lastPosition)
     );
   }
-  const admissionLine = watch?.admissionUrl
-    ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから見返せます👇\n${watch.admissionUrl}`
-    : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。`;
   return (
     `ご予約いただいた「${title}」の回にお会いできませんでした。\n\n` +
-    `${admissionLine}\n\n` +
+    (watch?.admissionUrl
+      ? `配信のあと${ARCHIVE_WINDOW_DAYS}日間は、こちらから見返せます👇\n` +
+        `${watch.admissionUrl}\n\n`
+      : `お送りした入場リンクから、配信のあと${ARCHIVE_WINDOW_DAYS}日間は見返せます。\n\n`) +
     `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
     `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
     `※約57分です。カメラ・マイクは使いません。`
@@ -247,12 +256,25 @@ function buildCtaFollowupText(kind: FollowupKind, url: string): string {
         `ご案内はこれで最後です。`;
 }
 
-async function candidates(
+export async function candidates(
   db: D1Database,
   kind: FollowupKind,
   cutoff: string,
 ): Promise<Candidate[]> {
   const delayColumn = kind === 'after_30m' ? 'first_delay_minutes' : 'second_delay_minutes';
+  const needsFirstCtaFollowup = kind === 'after_24h'
+    ? `AND EXISTS (
+         SELECT 1 FROM webinar_followups first_wf
+         WHERE first_wf.webinar_id = w.id AND first_wf.friend_id = c.friend_id
+           AND first_wf.kind = 'after_30m' AND first_wf.status = 'sent'
+       )`
+    : '';
+  const needsSecondCtaCutoff = kind === 'after_24h'
+    ? `AND datetime(
+         c.cta_clicked_at,
+         '+' || (cfg.second_delay_minutes + 1440) || ' minutes'
+       ) > datetime(?)`
+    : '';
   const { results } = await db.prepare(
     `WITH clicks AS (
        SELECT v.webinar_id, v.friend_id, MIN(v.cta_clicked_at) AS cta_clicked_at
@@ -260,7 +282,9 @@ async function candidates(
        JOIN webinar_followup_configs click_cfg
          ON click_cfg.webinar_id = v.webinar_id AND click_cfg.is_active = 1
        WHERE v.cta_clicked_at IS NOT NULL
-         AND datetime(v.cta_clicked_at) >= datetime(click_cfg.enabled_at)
+         AND datetime(v.cta_clicked_at) >= datetime(
+           COALESCE(click_cfg.stage_enabled_at, click_cfg.enabled_at)
+         )
        GROUP BY v.webinar_id, v.friend_id
      )
      SELECT w.id AS webinar_id, w.account_id, c.friend_id, w.slug,
@@ -272,7 +296,9 @@ async function candidates(
      JOIN webinars w ON w.id = c.webinar_id
      JOIN friends f ON f.id = c.friend_id AND f.is_following = 1
      JOIN webinar_followup_configs cfg ON cfg.webinar_id = w.id AND cfg.is_active = 1
-     WHERE datetime(c.cta_clicked_at) >= datetime(cfg.enabled_at)
+     WHERE datetime(c.cta_clicked_at) >= datetime(
+         COALESCE(cfg.stage_enabled_at, cfg.enabled_at)
+       )
        AND datetime(c.cta_clicked_at, '+' || cfg.${delayColumn} || ' minutes') <= datetime(?)
        AND NOT EXISTS (
          SELECT 1 FROM form_submissions fs
@@ -280,18 +306,24 @@ async function candidates(
          WHERE wc.webinar_id = w.id AND fs.friend_id = c.friend_id
            AND datetime(fs.created_at) >= datetime(c.cta_clicked_at)
        )
+       ${needsSecondCtaCutoff}
        AND NOT EXISTS (
          SELECT 1 FROM webinar_followups wf
          WHERE wf.webinar_id = w.id AND wf.friend_id = c.friend_id
            AND wf.kind = ? AND wf.status = 'sent'
        )
+       ${needsFirstCtaFollowup}
        AND EXISTS (
          SELECT 1 FROM webinar_ctas wc
          WHERE wc.webinar_id = w.id AND wc.form_id IS NOT NULL
        )
      ORDER BY datetime(c.cta_clicked_at) ASC
      LIMIT 50`,
-  ).bind(cutoff, kind).all<Candidate>();
+  ).bind(
+    cutoff,
+    ...(kind === 'after_24h' ? [cutoff] : []),
+    kind,
+  ).all<Candidate>();
   return results ?? [];
 }
 
@@ -324,7 +356,8 @@ async function getOrCreateFollowup(
   )!;
 }
 
-async function journeyCandidates(
+// sent/skipped は永久に除外し、失敗・未完了は最初の24時間だけ同じ行を再試行する。
+export async function journeyCandidates(
   db: D1Database,
   kind: WebinarJourneyFollowupKind,
   cutoff: string,
@@ -352,10 +385,17 @@ async function journeyCandidates(
            SELECT 1 FROM webinar_journey_followups jf
            WHERE jf.webinar_id = p.webinar_id AND jf.friend_id = p.friend_id
              AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
          )
        ORDER BY datetime(p.opened_at) ASC
        LIMIT 50`,
-    ).bind(cutoff, kind).all<JourneyCandidate>();
+    ).bind(cutoff, kind, cutoff).all<JourneyCandidate>();
     return results ?? [];
   }
 
@@ -364,6 +404,7 @@ async function journeyCandidates(
       `WITH missed AS (
          SELECT r.webinar_id, r.friend_id, MAX(r.session_start_at) AS missed_session_at
          FROM webinar_registrations r
+         JOIN webinars w ON w.id = r.webinar_id
          JOIN webinar_followup_configs cfg
            ON cfg.webinar_id = r.webinar_id AND cfg.is_active = 1
          WHERE datetime(r.created_at) >= datetime(COALESCE(cfg.stage_enabled_at, cfg.enabled_at))
@@ -373,6 +414,8 @@ async function journeyCandidates(
              WHERE future.webinar_id = r.webinar_id AND future.friend_id = r.friend_id
                AND future.session_start_at > unixepoch(?)
            )
+           -- 遅延だけで判定すると配信中に追客が飛ぶため、回の終了後に限定する。
+           AND r.session_start_at + w.duration_seconds <= unixepoch(?)
            AND NOT EXISTS (
              SELECT 1 FROM webinar_viewers v
              WHERE v.webinar_id = r.webinar_id AND v.friend_id = r.friend_id
@@ -392,8 +435,8 @@ async function journeyCandidates(
        )
        SELECT w.id AS webinar_id, w.account_id, m.friend_id, w.slug, w.title,
               w.duration_seconds, cfg.booking_url,
-              datetime(m.missed_session_at, 'unixepoch') AS source_at,
               m.missed_session_at AS session_start_at,
+              datetime(m.missed_session_at, 'unixepoch') AS source_at,
               (
                 SELECT v.last_position_seconds FROM webinar_viewers v
                 WHERE v.webinar_id = m.webinar_id AND v.friend_id = m.friend_id
@@ -417,10 +460,17 @@ async function journeyCandidates(
            SELECT 1 FROM webinar_journey_followups jf
            WHERE jf.webinar_id = m.webinar_id AND jf.friend_id = m.friend_id
              AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
          )
        ORDER BY m.missed_session_at ASC
        LIMIT 50`,
-    ).bind(cutoff, cutoff, kind).all<JourneyCandidate>();
+    ).bind(cutoff, cutoff, cutoff, kind, cutoff).all<JourneyCandidate>();
     return results ?? [];
   }
 
@@ -458,6 +508,8 @@ async function journeyCandidates(
         AND v.session_start_at = lr.session_start_at
        WHERE lr.session_start_at + w.duration_seconds + ${ARCHIVE_WINDOW_SECONDS}
                - ${ARCHIVE_CLOSING_LEAD_SECONDS} <= unixepoch(?)
+         AND lr.session_start_at + w.duration_seconds + ${ARCHIVE_WINDOW_SECONDS}
+               > unixepoch(?)
          AND NOT EXISTS (
            SELECT 1 FROM webinar_viewers clicked
            WHERE clicked.webinar_id = lr.webinar_id
@@ -469,10 +521,17 @@ async function journeyCandidates(
            WHERE jf.webinar_id = lr.webinar_id
              AND jf.friend_id = lr.friend_id
              AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
          )
        ORDER BY lr.session_start_at ASC
        LIMIT 50`,
-    ).bind(cutoff, kind).all<JourneyCandidate>();
+    ).bind(cutoff, cutoff, kind, cutoff).all<JourneyCandidate>();
     return results ?? [];
   }
 
@@ -485,6 +544,12 @@ async function journeyCandidates(
          WHERE first_jf.webinar_id = s.webinar_id AND first_jf.friend_id = s.friend_id
            AND first_jf.kind = 'submitted_no_booking_30m' AND first_jf.status = 'sent'
        )`
+    : '';
+  const needsSecondBookingCutoff = kind === 'submitted_no_booking_24h'
+    ? `AND datetime(
+         s.submitted_at,
+         '+' || (cfg.booking_second_delay_minutes + 1440) || ' minutes'
+       ) > datetime(?)`
     : '';
   const { results } = await db.prepare(
     `WITH submissions AS (
@@ -505,6 +570,7 @@ async function journeyCandidates(
        ON cfg.webinar_id = w.id AND cfg.is_active = 1
      WHERE cfg.booking_menu_id IS NOT NULL AND cfg.booking_url IS NOT NULL
        AND datetime(s.submitted_at, '+' || cfg.${delayColumn} || ' minutes') <= datetime(?)
+       ${needsSecondBookingCutoff}
        AND NOT EXISTS (
          SELECT 1 FROM bookings b
          WHERE b.friend_id = s.friend_id AND b.menu_id = cfg.booking_menu_id
@@ -516,15 +582,27 @@ async function journeyCandidates(
          WHERE mc.friend_id = s.friend_id AND mc.status IN ('confirmed', 'completed')
            AND datetime(mc.created_at) >= datetime(s.submitted_at)
        )
-       AND NOT EXISTS (
-         SELECT 1 FROM webinar_journey_followups jf
-         WHERE jf.webinar_id = s.webinar_id AND jf.friend_id = s.friend_id
-           AND jf.kind = ?
-       )
+         AND NOT EXISTS (
+           SELECT 1 FROM webinar_journey_followups jf
+           WHERE jf.webinar_id = s.webinar_id AND jf.friend_id = s.friend_id
+             AND jf.kind = ?
+             AND (
+               jf.status IN ('sent', 'skipped')
+               OR (
+                 jf.status IN ('failed', 'pending')
+                 AND datetime(jf.created_at, '+24 hours') < datetime(?)
+               )
+             )
+         )
        ${needsFirstFollowup}
      ORDER BY datetime(s.submitted_at) ASC
      LIMIT 50`,
-  ).bind(cutoff, kind).all<JourneyCandidate>();
+  ).bind(
+    cutoff,
+    ...(kind === 'submitted_no_booking_24h' ? [cutoff] : []),
+    kind,
+    cutoff,
+  ).all<JourneyCandidate>();
   return results ?? [];
 }
 
@@ -579,9 +657,18 @@ async function deliveryConfig(
 export async function processWebinarFollowups(
   db: D1Database,
   options: WebinarFollowupOptions,
-): Promise<{ sent: number; failed: number }> {
+): Promise<WebinarFollowupProcessResult> {
   const now = jstNow();
   const followupKinds = ['after_30m', 'after_24h'] as const;
+  const candidatesByKind: Record<WebinarFollowupKind | WebinarJourneyFollowupKind, number | null> = {
+    after_30m: 0,
+    after_24h: 0,
+    picker_no_registration: 0,
+    registered_no_show: 0,
+    submitted_no_booking_30m: 0,
+    submitted_no_booking_24h: 0,
+    archive_closing: 0,
+  };
   const followupResults = await Promise.allSettled(
     followupKinds.map((kind) => candidates(db, kind, now)),
   );
@@ -589,8 +676,10 @@ export async function processWebinarFollowups(
     const kind = followupKinds[index];
     if (result.status === 'rejected') {
       console.error('webinar followup candidate error:', kind, result.reason);
+      candidatesByKind[kind] = null;
       return [];
     }
+    candidatesByKind[kind] = result.value.length;
     return result.value.map((candidate) => ({ candidate, kind }));
   });
 
@@ -608,8 +697,10 @@ export async function processWebinarFollowups(
     const kind = journeyKinds[index];
     if (result.status === 'rejected') {
       console.error('webinar journey candidate error:', kind, result.reason);
+      candidatesByKind[kind] = null;
       return [];
     }
+    candidatesByKind[kind] = result.value.length;
     return result.value.map((candidate) => ({ candidate, kind }));
   });
   let sent = 0;
@@ -685,21 +776,18 @@ export async function processWebinarFollowups(
         continue;
       }
       const delivery = await deliveryConfig(db, candidate.account_id, options);
-      const liffId = delivery.liffId;
-      if (!liffId) throw new Error('LIFF ID not configured');
-      const pickerUrl = webinarPickerUrl(liffId, candidate.slug);
+      if (!delivery.liffId) throw new Error('LIFF ID not configured');
+      const pickerUrl = webinarPickerUrl(delivery.liffId, candidate.slug);
       const watch = kind === 'registered_no_show'
-        ? (() => {
-            const sessionStartAt = candidate.session_start_at ?? null;
-            return {
-              lastPositionSeconds: candidate.last_position_seconds ?? null,
-              formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
-              durationSeconds: candidate.duration_seconds ?? 0,
-              admissionUrl: sessionStartAt === null
+        ? {
+            lastPositionSeconds: candidate.last_position_seconds ?? null,
+            formCtaAtSeconds: candidate.form_cta_at_seconds ?? null,
+            durationSeconds: candidate.duration_seconds ?? 0,
+            admissionUrl:
+              candidate.session_start_at === null || candidate.session_start_at === undefined
                 ? null
-                : buildWebinarUrl(liffId, candidate.slug, sessionStartAt),
-            };
-          })()
+                : buildWebinarUrl(delivery.liffId, candidate.slug, candidate.session_start_at),
+          }
         : kind === 'archive_closing'
           ? (() => {
               if (candidate.session_start_at === null || candidate.session_start_at === undefined) {
@@ -713,12 +801,12 @@ export async function processWebinarFollowups(
                 sessionStartAt: candidate.session_start_at,
                 formId,
                 admissionUrl: buildWebinarUrl(
-                  liffId,
+                  delivery.liffId,
                   candidate.slug,
                   candidate.session_start_at,
                 ),
                 pickerUrl,
-                consultationUrl: formId ? formUrl(liffId, formId) : null,
+                consultationUrl: formId ? formUrl(delivery.liffId, formId) : null,
               };
             })()
           : undefined;
@@ -766,5 +854,5 @@ export async function processWebinarFollowups(
       failed++;
     }
   }
-  return { sent, failed };
+  return { sent, failed, candidates: candidatesByKind };
 }

@@ -70,6 +70,11 @@ import {
   awardWebinarCtaMileage,
   awardWebinarPositionMileage,
 } from '../services/webinar-mileage.js';
+import {
+  getWebinarFollowupDiagnostics,
+  isWebinarFollowupDiagnosticStage,
+  type WebinarFollowupDiagnosticStage,
+} from '../services/webinar-followup-diagnostics.js';
 import { requireRole } from '../middleware/role-guard.js';
 import { safeDecode } from '../utils/safe-decode.js';
 import type { Env } from '../index.js';
@@ -1047,6 +1052,27 @@ webinarRoutes.get('/api/webinars/:id/followup-config', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/webinars/:id/followup-config error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+webinarRoutes.get('/api/webinars/:id/followup-diagnostics', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const row = await getWebinarById(c.env.DB, id);
+    if (!row) return c.json({ success: false, error: 'Not found' }, 404);
+    const stage = c.req.query('stage');
+    if (stage !== undefined && !isWebinarFollowupDiagnosticStage(stage)) {
+      return c.json({ success: false, error: 'invalid_stage' }, 400);
+    }
+    const data = await getWebinarFollowupDiagnostics(
+      c.env.DB,
+      id,
+      stage !== undefined ? { stage: stage as WebinarFollowupDiagnosticStage } : {},
+    );
+    return c.json({ success: true, data });
+  } catch (err) {
+    console.error('GET /api/webinars/:id/followup-diagnostics error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

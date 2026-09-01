@@ -370,6 +370,8 @@ const KNOWN_GAPS: readonly string[] = [
   // analytics (2)
   'GET /api/analytics/ref-summary',
   'GET /api/analytics/ref/{refCode}',
+  // webinar diagnostics (1): 今回のスコープでは OpenAPI 本体を変更しないため、既知の未記載として管理する。
+  'GET /api/webinars/{id}/followup-diagnostics',
   // conversations (2)
   'GET /api/conversations',
   'GET /api/conversations/{friendId}',

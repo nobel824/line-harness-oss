@@ -124,6 +124,7 @@ function prepareJourneyDeliveryMocks() {
 describe('buildJourneyFollowupText', () => {
   const pickerUrl = 'https://liff.line.me/123/?page=webinar&slug=demo';
   const bookingUrl = 'https://line.the-harness.com/t/booking';
+  const admissionUrl = `https://liff.line.me/123/?page=webinar&slug=demo&sessionStartAt=${ARCHIVE_SESSION_START}&liffId=123`;
 
   test('未予約者には回の選択を案内する', () => {
     const text = buildJourneyFollowupText(
@@ -154,10 +155,29 @@ describe('buildJourneyFollowupText', () => {
         admissionUrl: null,
       },
     );
-    expect(text).toContain('ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。');
-    expect(text).toContain('お送りした入場リンクから、配信のあと3日間は見返せます。');
+    expect(text).toBe(
+      `ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。\n\n` +
+      `お送りした入場リンクから、配信のあと3日間は見返せます。\n\n` +
+      `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
+      `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
+      `※約57分です。カメラ・マイクは使いません。`,
+    );
+    expect(text).not.toContain(admissionUrl);
+  });
+
+  test('admissionUrl がある未視聴者には入場リンクと別回導線を案内する', () => {
+    const text = buildJourneyFollowupText(
+      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
+      {
+        lastPositionSeconds: null,
+        formCtaAtSeconds: 2997,
+        durationSeconds: 3420,
+        admissionUrl,
+      },
+    );
+    expect(text).toContain(`配信のあと3日間は、こちらから見返せます👇\n${admissionUrl}`);
     expect(text).toContain(pickerUrl);
-    expect(text).not.toContain('続きがまだ残っています');
+    expect(text).not.toContain('お送りした入場リンクから');
   });
 
   test('視聴位置が0秒の registered_no_show は未参加向け本文になる', () => {
@@ -175,74 +195,6 @@ describe('buildJourneyFollowupText', () => {
     expect(text).not.toContain('続きがまだ残っています');
   });
 
-  test('AC-5: 途中離脱の registered_no_show は admissionUrl 付きの続き案内になる', () => {
-    const admissionUrl = 'https://example.com/admission';
-    const text = buildJourneyFollowupText(
-      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      {
-        lastPositionSeconds: 1800,
-        formCtaAtSeconds: 2997,
-        durationSeconds: 3420,
-        admissionUrl,
-      },
-    );
-
-    expect(text).toContain(`配信のあと3日間は、こちらから続きをご覧いただけます👇\n${admissionUrl}`);
-    expect(text).not.toContain('お送りした入場リンクから');
-  });
-
-  test('AC-5: 未参加の registered_no_show は admissionUrl 付きの見返し案内になる', () => {
-    const admissionUrl = 'https://example.com/admission';
-    const text = buildJourneyFollowupText(
-      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      {
-        lastPositionSeconds: 0,
-        formCtaAtSeconds: 2997,
-        durationSeconds: 3420,
-        admissionUrl,
-      },
-    );
-
-    expect(text).toContain(`配信のあと3日間は、こちらから見返せます👇\n${admissionUrl}`);
-    expect(text).not.toContain('お送りした入場リンクから');
-  });
-
-  test('AC-6: admissionUrl が null のときは現行の本文をそのまま使う', () => {
-    const continued = buildJourneyFollowupText(
-      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      {
-        lastPositionSeconds: 1800,
-        formCtaAtSeconds: 2997,
-        durationSeconds: 3420,
-        admissionUrl: null,
-      },
-    );
-    const noShow = buildJourneyFollowupText(
-      'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
-      {
-        lastPositionSeconds: 0,
-        formCtaAtSeconds: 2997,
-        durationSeconds: 3420,
-        admissionUrl: null,
-      },
-    );
-
-    expect(continued).toBe(
-      `「AI導入ライブ」の続きがまだ残っています。\n\n` +
-      `いちばんお伝えしたいのは終盤です。\n` +
-      `Xを仕事につなげるために、最後に何から手をつけるかの話をしています。\n\n` +
-      `お送りした入場リンクから、配信のあと3日間は続きをご覧いただけます。\n\n` +
-      `※残りは約27分です。`,
-    );
-    expect(noShow).toBe(
-      `ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。\n\n` +
-      `お送りした入場リンクから、配信のあと3日間は見返せます。\n\n` +
-      `同じ内容を、月・水・金・土・日の20時から開催しています。\n` +
-      `都合のよい回に選び直せます👇\n${pickerUrl}\n\n` +
-      `※約57分です。カメラ・マイクは使いません。`,
-    );
-  });
-
   test('CTA直前まで見た途中離脱者には続き案内を送り、停止位置は出さない', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
@@ -250,15 +202,14 @@ describe('buildJourneyFollowupText', () => {
         lastPositionSeconds: 2996,
         formCtaAtSeconds: 2997,
         durationSeconds: 3420,
-        admissionUrl: null,
+        admissionUrl,
       },
     );
     expect(text).toContain('「AI導入ライブ」の続きがまだ残っています。');
-    expect(text).toContain('お送りした入場リンクから、配信のあと3日間は続きをご覧いただけます。');
+    expect(text).toContain(`配信のあと3日間は、こちらから続きをご覧いただけます👇\n${admissionUrl}`);
     expect(text).toContain('※残りは約7分です。');
     expect(text).not.toContain('2996');
     expect(text).not.toContain('選び直せます');
-    expect(text).not.toContain(pickerUrl);
   });
 
   test('CTAちょうどに到達した視聴者には registered_no_show を送らない', () => {
@@ -477,7 +428,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(fixture.inserted).toHaveLength(1);
     expect(fixture.inserted[0].values[3]).toBe('archive_closing');
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
@@ -503,7 +454,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain(
       'https://liff.line.me/liff-1/?page=form&id=form-1&liffId=liff-1',
@@ -522,7 +473,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     const archiveSql = fixture.preparedSql.find((sql) => sql.includes('latest_registrations'));
     expect(archiveSql).toBeDefined();
@@ -568,7 +519,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('続きが見られるのは、本日 20:57 までです。');
     expect(messages[0].text).not.toContain('page=form');
@@ -596,7 +547,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     expect(fixture.inserted).toHaveLength(0);
     const archiveSql = fixture.preparedSql.find((sql) => sql.includes('latest_registrations'));
@@ -632,7 +583,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('参加する回を選ぶ');
@@ -664,7 +615,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 1 });
+    expect(result).toMatchObject({ sent: 1, failed: 1 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     expect(fixture.inserted).not.toContainEqual(
       expect.objectContaining({ values: expect.arrayContaining(['archive_closing']) }),
@@ -702,7 +653,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 4, failed: 0 });
+    expect(result).toMatchObject({ sent: 4, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(4);
     expect(fixture.preparedSql.filter((sql) => sql.includes('FROM webinar_picker_opens p'))).not.toHaveLength(0);
     expect(fixture.preparedSql.filter((sql) => sql.includes('WITH missed AS'))).not.toHaveLength(0);
@@ -758,7 +709,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(preparedSql.some((sql) =>
       sql.includes('JOIN friends f ON f.id = c.friend_id AND f.is_following = 1'),
     )).toBe(true);
@@ -792,8 +743,8 @@ describe('processWebinarFollowups', () => {
     expect(noShowSql).toBeDefined();
     expect(noShowSql).toContain("wc.kind = 'form'");
     expect(noShowSql).toContain('MIN(wc.at_seconds)');
-    expect(noShowSql).toContain('last_position_seconds');
     expect(noShowSql).toContain('m.missed_session_at AS session_start_at');
+    expect(noShowSql).toContain('last_position_seconds');
     expect(noShowSql).not.toContain('2997');
     // form CTA が無いウェビナーでは MIN() が NULL になり、比較が NULL に評価されて
     // 「視聴済みなのに除外されない」= 完走者に no_show が飛ぶ。COALESCE を外すと
@@ -824,7 +775,7 @@ describe('processWebinarFollowups', () => {
             return this;
           },
           async all() {
-            if (sql.includes('WITH missed AS') && values[2] === 'registered_no_show') {
+            if (sql.includes('WITH missed AS') && values[3] === 'registered_no_show') {
               return { results: [candidate] };
             }
             return { results: [] };
@@ -855,7 +806,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     expect(updates).toContainEqual(expect.objectContaining({
       sql: expect.stringContaining("last_error = 'cta_reached'"),
@@ -886,7 +837,7 @@ describe('processWebinarFollowups', () => {
             return this;
           },
           async all() {
-            if (sql.includes('WITH missed AS') && values[2] === 'registered_no_show') {
+            if (sql.includes('WITH missed AS') && values[3] === 'registered_no_show') {
               return { results: [candidate] };
             }
             return { results: [] };
@@ -917,7 +868,7 @@ describe('processWebinarFollowups', () => {
       defaultLiffId: 'liff-1',
     });
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
     const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
     expect(messages[0].text).toContain('続きがまだ残っています');
