@@ -60,6 +60,7 @@ import { setup } from './routes/setup.js';
 import { autoReplies } from './routes/auto-replies.js';
 import { adminAuth } from './routes/admin-auth.js';
 import { resolveCorsOrigin } from './middleware/admin-auth-config.js';
+import { defaultCachePolicyMiddleware } from './middleware/cache-policy.js';
 import booking from './routes/booking.js';
 import events from './routes/events.js';
 import { trafficPools } from './routes/traffic-pools.js';
@@ -156,6 +157,11 @@ export type Env = {
 };
 
 const app = new Hono<Env>();
+
+// Private Workers Cache pilot: only responses that deliberately declare a
+// public Cache-Control policy may enter the cache. This wrapper runs after all
+// downstream handlers and supplies no-store to every unmarked response.
+app.use('*', defaultCachePolicyMiddleware);
 
 // Public form endpoint used by the-harness.com. Keep this allowlist separate
 // from credentialed admin CORS so the media origin gains access to this route
