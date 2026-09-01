@@ -6,6 +6,7 @@ export interface Friend {
   picture_url: string | null;
   status_message: string | null;
   is_following: number;
+  is_internal?: number;
   first_followed_at?: string | null;
   current_follow_started_at?: string | null;
   last_followed_at?: string | null;
@@ -134,6 +135,22 @@ export async function getFriendById(
     .prepare(`SELECT * FROM friends WHERE id = ?`)
     .bind(id)
     .first<Friend>();
+}
+
+export async function updateFriendInternalStatus(
+  db: D1Database,
+  friendId: string,
+  isInternal: boolean,
+): Promise<Friend | null> {
+  const existing = await getFriendById(db, friendId);
+  if (!existing) return null;
+
+  await db
+    .prepare('UPDATE friends SET is_internal = ?, updated_at = ? WHERE id = ?')
+    .bind(isInternal ? 1 : 0, jstNow(), friendId)
+    .run();
+
+  return getFriendById(db, friendId);
 }
 
 /**

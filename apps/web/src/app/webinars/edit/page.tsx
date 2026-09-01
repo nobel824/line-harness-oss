@@ -281,16 +281,18 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
   const [analytics, setAnalytics] = useState<WebinarAnalyticsWithJourney | null>(null)
   const [userComments, setUserComments] = useState<WebinarUserComment[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [includeInternal, setIncludeInternal] = useState(false)
 
   useEffect(() => {
     setError(null)
-    Promise.all([webinarApi.analytics(webinarId), webinarApi.userComments(webinarId)])
+    setAnalytics(null)
+    Promise.all([webinarApi.analytics(webinarId, !includeInternal), webinarApi.userComments(webinarId)])
       .then(([analyticsRes, commentsRes]) => {
         setAnalytics(analyticsRes.data as WebinarAnalyticsWithJourney)
         setUserComments(commentsRes.data)
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-  }, [webinarId])
+  }, [webinarId, includeInternal])
 
   if (error) {
     return (
@@ -441,6 +443,23 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
             </div>
             <span className="text-xs font-medium text-slate-600">最近の参加者</span>
           </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <input
+            type="checkbox"
+            checked={includeInternal}
+            onChange={(event) => setIncludeInternal(event.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+          内部アカウントを含める
+        </label>
+        {!includeInternal && (
+          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+            内部アカウントを除外中
+          </span>
         )}
       </div>
 

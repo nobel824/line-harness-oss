@@ -65,6 +65,26 @@ describe('processWebinarReminders', () => {
     );
   });
 
+  test('AC-4: is_internal を変えても予約リマインドの送信対象は変わらない', async () => {
+    const run = async (isInternal: number) => {
+      dbMocks.getDueWebinarRegistrations.mockResolvedValue([REG]);
+      dbMocks.getFriendById.mockResolvedValue({
+        id: 'friend-1', line_user_id: 'U1', is_following: 1, is_internal: isInternal,
+      });
+      proxyFetch.mockClear();
+      const result = await processWebinarReminders({} as D1Database, OPTIONS);
+      const body = JSON.parse(String((proxyFetch.mock.calls[0] as [string, RequestInit])[1].body)) as {
+        to: string;
+      };
+      return { result, recipient: body.to };
+    };
+
+    const external = await run(0);
+    const internal = await run(1);
+
+    expect(internal).toEqual(external);
+  });
+
   test('proxy 送信失敗時は notified を刻まず、次 tick で再試行できる', async () => {
     dbMocks.getDueWebinarRegistrations.mockResolvedValue([REG]);
     proxyFetch.mockResolvedValue(
