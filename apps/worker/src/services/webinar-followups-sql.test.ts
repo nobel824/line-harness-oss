@@ -393,6 +393,15 @@ describe('webinar follow-up candidate SQL', () => {
         prepareDeliveryMocks();
         const scenarioDb = createSqlite();
         seedJourneyStage(scenarioDb, kind);
+        if (kind === 'archive_closing') {
+          insertJourneyFollowup(
+            scenarioDb,
+            'registered_no_show',
+            'sent',
+            '2026-08-09T00:00:00+09:00',
+            'journey-registered-no-show-sent',
+          );
+        }
         insertJourneyFollowup(
           scenarioDb,
           kind,
@@ -697,6 +706,13 @@ describe('webinar follow-up candidate SQL', () => {
       sessionStartAt: epoch('2026-08-07T20:00:00+09:00'),
       lastPositionSeconds: 2997,
     });
+    insertJourneyFollowup(
+      sqlite,
+      'registered_no_show',
+      'sent',
+      '2026-08-08T00:00:00+09:00',
+      'journey-registered-no-show-sent-overdue',
+    );
 
     let result = await processOn(sqlite);
     expect(result).toMatchObject({ sent: 0, failed: 0 });
@@ -710,6 +726,13 @@ describe('webinar follow-up candidate SQL', () => {
       sessionStartAt: epoch('2026-08-08T23:00:00+09:00'),
       lastPositionSeconds: 2997,
     });
+    insertJourneyFollowup(
+      withinWindowDb,
+      'registered_no_show',
+      'sent',
+      '2026-08-09T00:00:00+09:00',
+      'journey-registered-no-show-sent-within-window',
+    );
     try {
       result = await processOn(withinWindowDb);
       expect(result).toMatchObject({ sent: 1, failed: 0 });
