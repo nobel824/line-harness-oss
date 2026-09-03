@@ -212,7 +212,7 @@ describe('buildJourneyFollowupText', () => {
     expect(text).not.toContain('選び直せます');
   });
 
-  test('CTAちょうどに到達した視聴者には registered_no_show を送らない', () => {
+  test('CTAちょうどに到達していても完走していない視聴者には続き案内を送る', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
       {
@@ -222,10 +222,11 @@ describe('buildJourneyFollowupText', () => {
         admissionUrl: null,
       },
     );
-    expect(text).toBeNull();
+    expect(text).not.toBeNull();
+    expect(text).toContain('「AI導入ライブ」の続きがまだ残っています。');
   });
 
-  test('CTAを1秒超えた視聴者にも registered_no_show を送らない', () => {
+  test('CTAを1秒超えていても完走していない視聴者には続き案内を送る', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
       {
@@ -235,10 +236,11 @@ describe('buildJourneyFollowupText', () => {
         admissionUrl: null,
       },
     );
-    expect(text).toBeNull();
+    expect(text).not.toBeNull();
+    expect(text).toContain('「AI導入ライブ」の続きがまだ残っています。');
   });
 
-  test('form CTA が無いウェビナーは視聴していても未視聴と同じ本文になる', () => {
+  test('form CTA が無いウェビナーでも途中離脱者には続き案内を送る', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
       {
@@ -248,13 +250,12 @@ describe('buildJourneyFollowupText', () => {
         admissionUrl: null,
       },
     );
-    expect(text).toContain('ご予約いただいた「AI導入ライブ」の回にお会いできませんでした。');
-    expect(text).toContain('お送りした入場リンクから、配信のあと3日間は見返せます。');
-    expect(text).toContain(pickerUrl);
-    expect(text).not.toContain('続きがまだ残っています');
+    expect(text).toContain('「AI導入ライブ」の続きがまだ残っています。');
+    expect(text).toContain('※残りは約37分です。');
+    expect(text).not.toContain('選び直せます');
   });
 
-  test('残り1分未満の途中離脱者は「あと少し」と出す', () => {
+  test('残り1分未満まで視聴した registered_no_show は本文を送らない', () => {
     const text = buildJourneyFollowupText(
       'registered_no_show', 'AI導入ライブ', pickerUrl, bookingUrl,
       {
@@ -264,8 +265,7 @@ describe('buildJourneyFollowupText', () => {
         admissionUrl: null,
       },
     );
-    expect(text).toContain('※残りはあと少しです。');
-    expect(text).not.toContain('3370');
+    expect(text).toBeNull();
   });
 
   test('フォーム回答後の未予約者には相談予約リンクだけを案内する', () => {
@@ -745,13 +745,17 @@ describe('processWebinarFollowups', () => {
     }));
   });
 
-  test('registered_no_show の候補SQLは form CTA の最小秒を COALESCE 付きで閾値にし、2997 を埋め込まない', async () => {
+  test('CTAクリック済みの registered_no_show は候補SQLの NOT EXISTS で除外する', async () => {
     const preparedSql: string[] = [];
+    const boundValues: unknown[][] = [];
     const db = {
       prepare(sql: string) {
         preparedSql.push(sql);
         return {
-          bind() { return this; },
+          bind(...bound: unknown[]) {
+            if (sql.includes('WITH missed AS')) boundValues.push(bound);
+            return this;
+          },
           async all() { return { results: [] }; },
           async first() { return null; },
           async run() { return { success: true }; },
@@ -772,13 +776,55 @@ describe('processWebinarFollowups', () => {
     expect(noShowSql).toContain('m.missed_session_at AS session_start_at');
     expect(noShowSql).toContain('last_position_seconds');
     expect(noShowSql).not.toContain('2997');
-    // form CTA が無いウェビナーでは MIN() が NULL になり、比較が NULL に評価されて
-    // 「視聴済みなのに除外されない」= 完走者に no_show が飛ぶ。COALESCE を外すと
-    // モック越しのテストは全部 green のまま沈黙故障するので、SQL 文字列で縛る。
-    expect(noShowSql).toMatch(/COALESCE\(\s*\(\s*SELECT MIN\(wc\.at_seconds\)/);
+    // CTAの表示位置は演出上の値なので、本人がクリックした事実だけを除外条件にする。
+    expect(noShowSql).toContain('AND v.cta_clicked_at IS NOT NULL');
+    expect(noShowSql).not.toMatch(/v\.last_position_seconds\s*>=\s*COALESCE/);
+    expect(boundValues).toEqual([[
+      '2026-08-10T20:00:00+09:00',
+      '2026-08-10T20:00:00+09:00',
+      '2026-08-10T20:00:00+09:00',
+      'registered_no_show',
+      '2026-08-10T20:00:00+09:00',
+    ]]);
   });
 
-  test('CTA到達済みの registered_no_show 候補は送らず skipped にする', async () => {
+  test('CTAの表示位置を超えても未クリックの registered_no_show は候補になり続き案内を送る', async () => {
+    prepareJourneyDeliveryMocks();
+    const fixture = makeJourneyDb({
+      registeredResults: [{
+        webinar_id: 'webinar-1',
+        account_id: 'account-1',
+        friend_id: 'friend-1',
+        slug: 'demo',
+        title: 'AI導入ライブ',
+        booking_url: null,
+        source_at: '2026-08-10T19:00:00+09:00',
+        duration_seconds: 3449,
+        last_position_seconds: 2375,
+        form_cta_at_seconds: 1800,
+        cta_clicked_at: null,
+        session_start_at: ARCHIVE_SESSION_START,
+      }],
+      journeyRows: {
+        registered_no_show: { id: 'journey-1', retry_key: 'retry-j', status: 'pending' },
+      },
+    });
+
+    const result = await processWebinarFollowups(fixture.db, {
+      proxyBaseUrl: 'https://proxy.example.com',
+      defaultAccessToken: 'token',
+      defaultLiffId: 'liff-1',
+    });
+
+    expect(result).toMatchObject({ sent: 1, failed: 0 });
+    expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(1);
+    const messages = proxyMocks.pushViaHarnessProxy.mock.calls[0][3] as Array<{ text: string }>;
+    expect(messages[0].text.startsWith('「AI導入ライブ」の続きがまだ残っています。')).toBe(true);
+    const noShowSql = fixture.preparedSql.find((sql) => sql.includes('WITH missed AS'));
+    expect(noShowSql).toContain('AND v.cta_clicked_at IS NOT NULL');
+  });
+
+  test('実質完走した registered_no_show は送らず watched_to_end として skipped にする', async () => {
     const updates: Array<{ sql: string; values: unknown[] }> = [];
     const candidate = {
       webinar_id: 'webinar-1',
@@ -788,9 +834,9 @@ describe('processWebinarFollowups', () => {
       title: 'AI導入ライブ',
       booking_url: null,
       source_at: '2026-08-10T19:00:00+09:00',
-      duration_seconds: 3420,
-      last_position_seconds: 2997,
-      form_cta_at_seconds: 2997,
+      duration_seconds: 3449,
+      last_position_seconds: 3400,
+      form_cta_at_seconds: 1800,
     };
     const db = {
       prepare(sql: string) {
@@ -835,7 +881,7 @@ describe('processWebinarFollowups', () => {
     expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     expect(updates).toContainEqual(expect.objectContaining({
-      sql: expect.stringContaining("last_error = 'cta_reached'"),
+      sql: expect.stringContaining("last_error = 'watched_to_end'"),
       values: ['2026-08-10T20:00:00+09:00', 'journey-1'],
     }));
   });
