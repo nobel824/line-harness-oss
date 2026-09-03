@@ -12,6 +12,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { buildMeetingDateOptions } from './date-options.js';
 import { FormFieldControl, type FormField } from './form-fields.js';
+import { resolveCtaOpenTracking, resolvePersistentCta } from './persistent-cta.js';
 import { RegistrationCompletionCloseButton } from './registration-completion.js';
 import {
   confirmRegistrationResult,
@@ -67,6 +68,8 @@ interface WebinarCtaCard {
   formId: string | null;
   url: string | null;
 }
+
+type CtaOpenOptions = { persistent?: boolean };
 
 interface FormDef {
   id: string;
@@ -275,7 +278,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
   const baseOffsetRef = useRef(0);    // state.offsetSeconds
   const commentIdxRef = useRef(0);    // 次に表示するサクラコメント index
   const ctaIdxRef = useRef(0);        // 次に表示する CTA カード index
-  const openCtaRef = useRef<(card: WebinarCtaCard) => void>(() => undefined);
+  const openCtaRef = useRef<(card: WebinarCtaCard, opts?: CtaOpenOptions) => void>(() => undefined);
   const chatBoxRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<WebinarState | null>(null);
   stateRef.current = state;
@@ -617,10 +620,11 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
     }
   };
 
-  const openCta = (card: WebinarCtaCard) => {
+  const openCta = (card: WebinarCtaCard, opts: CtaOpenOptions = {}) => {
     if (!state?.live) return;
+    const tracking = resolveCtaOpenTracking(opts.persistent === true);
     // クリック記録 (fire-and-forget、プレビューでは送らない)
-    if (!IS_PREVIEW) {
+    if (!IS_PREVIEW && tracking.sendCtaClick) {
       void apiPost(`/api/liff/webinars/${encodeURIComponent(slug)}/cta-click`, {
         sessionStartAt: state.sessionStartAt,
         ctaId: card.id,
@@ -635,7 +639,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
       return;
     }
     if (card.kind === 'form' && card.formId) {
-      trackFunnelEvent('form_open', card);
+      trackFunnelEvent('form_open', card, tracking.fieldName);
       setFormSheet({ cta: card, phase: 'loading' });
       // 開封記録 (フォーム機能側のファネル計測に乗せる)
       if (!IS_PREVIEW) {
@@ -1003,6 +1007,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
   // PC の横長ウィンドウで video (w-full) が画面高を食い尽くしてチャット欄が
   // 潰れないよう、全体をスマホ幅カラム (max-w-md) に閉じ込めて中央寄せする。
   // スマホでは max-w-md は効かないので挙動不変。
+  const persistentCta = resolvePersistentCta(state, activeCta, ctaVisible);
   return (
     <div className="flex h-dvh justify-center bg-gray-900 text-white">
       <div className="flex h-full w-full max-w-md flex-col">
@@ -1066,6 +1071,19 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
           ))}
         </div>
       )}
+
+      {persistentCta ? (
+        <div className="flex items-center gap-1 border-b border-gray-700 px-3 text-xs">
+          <button
+            type="button"
+            onClick={() => openCta(persistentCta, { persistent: true })}
+            className="inline-flex min-h-11 items-center text-gray-300 underline underline-offset-2 active:text-gray-100"
+          >
+            {persistentCta.buttonLabel}
+          </button>
+          <span className="text-[11px] text-gray-500">（この画面のまま開きます）</span>
+        </div>
+      ) : null}
 
       <div ref={chatBoxRef} className="flex-1 overflow-y-auto p-3 text-sm">
         {chat.map((item) =>
