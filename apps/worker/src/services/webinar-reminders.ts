@@ -124,20 +124,24 @@ export async function processWebinarReminders(
   const dayBeforeTargets = (dayBeforeCandidates ?? []).filter((reg) =>
     isDayBeforeReminderDue(reg.session_start_at, now),
   );
-  // 前日リマインドが暴発しても、入場リンク本体である5分前リマインドは止めない。
-  const dayBeforeOverLimit = dayBeforeTargets.length > DAY_BEFORE_REMINDER_MAX_TARGETS;
-  if (dayBeforeOverLimit) {
+  // 上限は「止める」ではなく「1 tick あたりに絞る」。止めると、同じ回に21人以上が
+  // 予約した瞬間に窓の4時間ずっと送信0のまま、窓が閉じた tick で全員が期限切れとして
+  // 消化され、二度と送られない。溢れた分は NULL のまま次 tick に回す。
+  const dayBeforeBatch = dayBeforeTargets.slice(0, DAY_BEFORE_REMINDER_MAX_TARGETS);
+  if (dayBeforeTargets.length > DAY_BEFORE_REMINDER_MAX_TARGETS) {
     console.error(
-      'webinar day-before reminder target limit exceeded:',
+      'webinar day-before reminder backlog exceeds per-tick cap:',
       dayBeforeTargets.length,
     );
   }
+  let dayBeforeSent = 0;
+  let dayBeforeFailed = 0;
 
-  for (let i = 0; !dayBeforeOverLimit && i < (dayBeforeCandidates ?? []).length; i++) {
+  for (let i = 0; i < (dayBeforeCandidates ?? []).length; i++) {
     const reg = dayBeforeCandidates[i];
-    if (isDayBeforeReminderDue(reg.session_start_at, now)) {
+    if (dayBeforeBatch.includes(reg)) {
       try {
-        if (dayBeforeTargets.indexOf(reg) > 0) await sleep(addJitter(50, 200));
+        if (dayBeforeSent + dayBeforeFailed > 0) await sleep(addJitter(50, 200));
         const friend = await getFriendById(db, reg.friend_id);
         if (!friend || !friend.is_following) {
           // ブロック済み等は送らず消化 (毎 tick 積み直さない)
@@ -146,7 +150,7 @@ export async function processWebinarReminders(
         }
         const { accessToken, liffId } = await resolveDeliveryConfig(db, reg.account_id, options);
         if (!liffId) {
-          failed++;
+          dayBeforeFailed++;
           continue;
         }
         await pushViaHarnessProxy(options.proxyBaseUrl, accessToken, friend.line_user_id, [
@@ -163,15 +167,24 @@ export async function processWebinarReminders(
         ], `${reg.id}:day_before`, options.proxyDispatch);
         // 実送信が成功した後だけ通知済みにする。失敗時は NULL のままなので次 tick で再試行。
         await markWebinarRegistrationDayBeforeReminded(db, reg.id);
-        sent++;
+        dayBeforeSent++;
       } catch (err) {
         console.error('webinar day-before reminder error:', reg.id, err);
-        failed++;
+        dayBeforeFailed++;
       }
-    } else if (shouldConsumeExpiredDayBeforeReminder(reg.session_start_at, now)) {
+    } else if (
+      !isDayBeforeReminderDue(reg.session_start_at, now) &&
+      shouldConsumeExpiredDayBeforeReminder(reg.session_start_at, now)
+    ) {
       await markWebinarRegistrationDayBeforeReminded(db, reg.id);
     }
   }
+  if (dayBeforeSent > 0 || dayBeforeFailed > 0) {
+    // 合算ログだけだと、5分前が動いている限り前日分が死んでも気づけない。
+    console.log(`[webinar-reminders] day_before sent=${dayBeforeSent} failed=${dayBeforeFailed}`);
+  }
+  sent += dayBeforeSent;
+  failed += dayBeforeFailed;
 
   for (let i = 0; i < due.length; i++) {
     const reg = due[i];

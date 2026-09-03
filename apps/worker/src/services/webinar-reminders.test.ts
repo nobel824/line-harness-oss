@@ -9,6 +9,8 @@ const dbMocks = {
   getLineAccountById: vi.fn(),
 };
 vi.mock('@line-crm/db', () => dbMocks);
+// 偽タイマー下で本物の sleep を待つとテストが止まるため、送信間ジッターは潰す。
+vi.mock('./stealth.js', () => ({ sleep: vi.fn().mockResolvedValue(undefined), addJitter: (min: number) => min }));
 
 const { processWebinarReminders, sendWebinarRegistrationConfirmation, buildWebinarUrl } =
   await import('./webinar-reminders.js');
@@ -210,24 +212,48 @@ describe('processWebinarReminders', () => {
     expect(dbMocks.markWebinarRegistrationDayBeforeReminded).not.toHaveBeenCalled();
   });
 
-  test('1 tickの前日リマインド対象が20件を超えたら送信せずbailする', async () => {
+  test('1 tickの前日リマインド対象が20件を超えたら20件だけ送り、残りは次tickに回す', async () => {
     vi.setSystemTime(new Date('2026-09-04T20:05:00+09:00'));
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue(
       Array.from({ length: 21 }, (_, index) => ({ ...DAY_BEFORE_REG, id: `reg-${index}` })),
     );
-    // bail するのは前日リマインドだけで、入場リンク本体の5分前は止めない。
+    // 上限に当たっても、入場リンク本体の5分前は止めない。
     dbMocks.getDueWebinarRegistrations.mockResolvedValue([
       { ...REG, id: 'reg-five-minute', session_start_at: epoch('2026-09-04T20:09:00+09:00') },
     ]);
 
     const result = await processWebinarReminders({} as D1Database, OPTIONS);
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
-    expect(proxyFetch).toHaveBeenCalledTimes(1);
-    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).not.toHaveBeenCalled();
+    // 前日20件 + 5分前1件。溢れた1件は NULL のまま次 tick に回るので消化もされない。
+    expect(result).toEqual({ sent: 21, failed: 0 });
+    expect(proxyFetch).toHaveBeenCalledTimes(21);
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).toHaveBeenCalledTimes(20);
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).not.toHaveBeenCalledWith({}, 'reg-20');
     expect(dbMocks.markWebinarRegistrationNotified).toHaveBeenCalledWith({}, 'reg-five-minute');
     expect(error).toHaveBeenCalled();
+  });
+
+  test('上限で溢れた前日リマインドは、窓が閉じるまで消化されず次tickで送られる', async () => {
+    vi.setSystemTime(new Date('2026-09-04T20:05:00+09:00'));
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const regs = Array.from({ length: 21 }, (_, index) => ({ ...DAY_BEFORE_REG, id: `reg-${index}` }))
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue(regs)
+
+    await processWebinarReminders({} as D1Database, OPTIONS)
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).toHaveBeenCalledTimes(20)
+
+    // 次 tick: 送信済み20件は SQL 側で外れ、残り1件だけが返る
+    vi.clearAllMocks()
+    proxyFetch.mockResolvedValue(new Response(null, { status: 200 }))
+    vi.setSystemTime(new Date('2026-09-04T20:10:00+09:00'))
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue([regs[20]])
+    dbMocks.getDueWebinarRegistrations.mockResolvedValue([])
+
+    const result = await processWebinarReminders({} as D1Database, OPTIONS)
+
+    expect(result).toEqual({ sent: 1, failed: 0 })
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).toHaveBeenCalledWith({}, 'reg-20')
   });
 
   test('前日と5分前でX-Line-Retry-Keyを分け、5分前側の状態は従来どおり刻む', async () => {
