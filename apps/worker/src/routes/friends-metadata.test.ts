@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 const dbMocks = {
   getStaffByApiKey: vi.fn().mockResolvedValue(null),
   getFriendById: vi.fn(),
+  updateFriendInternalStatus: vi.fn(),
   getFriendTags: vi.fn(),
   jstNow: vi.fn(() => '2026-08-21T00:00:00.000+09:00'),
 };
@@ -46,6 +47,21 @@ function putMetadata(body: unknown) {
   );
 }
 
+function putInternal(body: unknown) {
+  const instance = new Hono<Env>();
+  instance.use('*', authMiddleware);
+  instance.route('/', friends);
+  return instance.request(
+    '/api/friends/f-1',
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    env,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   boundMetadata = '';
@@ -54,6 +70,20 @@ beforeEach(() => {
   dbMocks.getFriendById.mockResolvedValue({
     id: 'f-1',
     metadata: JSON.stringify({ plan: 'free', source: 'ad' }),
+  });
+  dbMocks.updateFriendInternalStatus.mockResolvedValue({
+    id: 'f-1',
+    line_user_id: 'U1',
+    display_name: 'テスト友だち',
+    picture_url: null,
+    status_message: null,
+    is_following: 1,
+    is_internal: 0,
+    user_id: null,
+    line_account_id: null,
+    metadata: '{}',
+    created_at: '2026-08-21T00:00:00.000+09:00',
+    updated_at: '2026-08-21T00:00:00.000+09:00',
   });
 });
 
@@ -89,5 +119,38 @@ describe('PUT /api/friends/:id/metadata', () => {
 
     expect(res.status).toBe(200);
     expect(JSON.parse(boundMetadata)).toEqual({ plan: '', source: 0 });
+  });
+});
+
+describe('PUT /api/friends/:id', () => {
+  test.each([true, false])('isInternal=%s を更新できる', async (isInternal) => {
+    dbMocks.updateFriendInternalStatus.mockResolvedValueOnce({
+      id: 'f-1',
+      line_user_id: 'U1',
+      display_name: 'テスト友だち',
+      picture_url: null,
+      status_message: null,
+      is_following: 1,
+      is_internal: isInternal ? 1 : 0,
+      user_id: null,
+      line_account_id: null,
+      metadata: '{}',
+      created_at: '2026-08-21T00:00:00.000+09:00',
+      updated_at: '2026-08-21T00:00:00.000+09:00',
+    });
+
+    const res = await putInternal({ isInternal });
+
+    expect(res.status).toBe(200);
+    expect(dbMocks.updateFriendInternalStatus).toHaveBeenCalledWith(db, 'f-1', isInternal);
+    const body = (await res.json()) as { data: { isInternal: boolean } };
+    expect(body.data.isInternal).toBe(isInternal);
+  });
+
+  test('isInternal が boolean でなければ 400', async () => {
+    const res = await putInternal({ isInternal: 'true' });
+
+    expect(res.status).toBe(400);
+    expect(dbMocks.updateFriendInternalStatus).not.toHaveBeenCalled();
   });
 });

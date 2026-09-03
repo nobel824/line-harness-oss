@@ -1531,6 +1531,38 @@ describe('admin CRUD', () => {
     });
   });
 
+  test('GET /api/webinars/:id/analytics?excludeInternal=true — 全7集計へ除外指定を渡す', async () => {
+    dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
+    dbMocks.getWebinarSessionStats.mockResolvedValue([]);
+    dbMocks.getWebinarDropoff.mockResolvedValue([]);
+    dbMocks.getWebinarParticipantStats.mockResolvedValue([]);
+    dbMocks.getWebinarAnalyticsSummary.mockResolvedValue({
+      reservations: 0, viewers: 0, registered_and_joined: 0, watched_5m: 0,
+      watched_15m: 0, completed: 0, avg_watched_seconds: 0, cta_clicks: 0,
+      form_submissions: 0,
+    });
+    dbMocks.getWebinarDailyStats.mockResolvedValue([]);
+    dbMocks.getWebinarFormFunnelStats.mockResolvedValue({
+      cta_impressions: 0, cta_clicks: 0, form_opens: 0, form_starts: 0,
+      submit_attempts: 0, submit_successes: 0, submit_errors: 0, field_completions: [],
+    });
+    dbMocks.getWebinarJourneyStats.mockResolvedValue({
+      picker_opens: 0, registrations: 0, viewers: 0, form_submissions: 0,
+      entry_tag_friends: null, invite_tag_friends: null, followups: {}, journey_followups: {},
+    });
+
+    const res = await req('/api/webinars/w1/analytics?excludeInternal=true');
+
+    expect(res.status).toBe(200);
+    expect(dbMocks.getWebinarSessionStats).toHaveBeenCalledWith(env.DB, 'w1', true);
+    expect(dbMocks.getWebinarDropoff).toHaveBeenCalledWith(env.DB, 'w1', true);
+    expect(dbMocks.getWebinarParticipantStats).toHaveBeenCalledWith(env.DB, 'w1', 200, true);
+    expect(dbMocks.getWebinarAnalyticsSummary).toHaveBeenCalledWith(env.DB, 'w1', 6480, true);
+    expect(dbMocks.getWebinarDailyStats).toHaveBeenCalledWith(env.DB, 'w1', true);
+    expect(dbMocks.getWebinarFormFunnelStats).toHaveBeenCalledWith(env.DB, 'w1', true);
+    expect(dbMocks.getWebinarJourneyStats).toHaveBeenCalledWith(env.DB, 'w1', true);
+  });
+
   test('DELETE /api/webinars/:id', async () => {
     dbMocks.getWebinarById.mockResolvedValue(makeWebinar());
     const res = await req('/api/webinars/w1', { method: 'DELETE' });

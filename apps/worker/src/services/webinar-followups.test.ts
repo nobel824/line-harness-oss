@@ -111,9 +111,9 @@ function makeJourneyDb(options: JourneyDbOptions = {}) {
   return { db, preparedSql, inserted, updates };
 }
 
-function prepareJourneyDeliveryMocks() {
+function prepareJourneyDeliveryMocks(isInternal = 0) {
   dbMocks.getFriendById.mockResolvedValue({
-    id: 'friend-1', line_user_id: 'U1', is_following: 1,
+    id: 'friend-1', line_user_id: 'U1', is_following: 1, is_internal: isInternal,
   });
   dbMocks.getLineAccountById.mockResolvedValue({
     id: 'account-1', channel_access_token: 'tok', liff_id: 'liff-1',
@@ -436,6 +436,32 @@ describe('processWebinarFollowups', () => {
     expect(messages[0].text).toContain('入場リンクは、本日 20:57 で閉じます。');
     expect(messages[0].text).toContain('sessionStartAt=' + ARCHIVE_SESSION_START);
     expect(messages[0].text).toContain('別の回に申し込み直せます。');
+  });
+
+  test('AC-4: is_internal を変えても followup の送信対象は変わらない', async () => {
+    const run = async (isInternal: number) => {
+      vi.clearAllMocks();
+      prepareJourneyDeliveryMocks(isInternal);
+      const fixture = makeJourneyDb({
+        archiveResults: [archiveCandidate({ last_position_seconds: 0 })],
+      });
+      const result = await processWebinarFollowups(fixture.db, {
+        proxyBaseUrl: 'https://proxy.example.com',
+        defaultAccessToken: 'token',
+        defaultLiffId: 'liff-1',
+      });
+      const [, , recipient] = proxyMocks.pushViaHarnessProxy.mock.calls[0] as [
+        string,
+        string,
+        string,
+      ];
+      return { result, recipient };
+    };
+
+    const external = await run(0);
+    const internal = await run(1);
+
+    expect(internal).toEqual(external);
   });
 
   test('AC-11-3: 完走してCTA未クリックなら相談フォームURLを含む(c)を送る', async () => {

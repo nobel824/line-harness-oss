@@ -1293,14 +1293,15 @@ webinarRoutes.get('/api/webinars/:id/analytics', async (c) => {
     const row = await getWebinarById(c.env.DB, id);
     if (!row) return c.json({ success: false, error: 'Not found' }, 404);
     const completionThreshold = Math.max(1, Math.floor(row.duration_seconds * 0.9));
+    const excludeInternal = c.req.query('excludeInternal') === 'true';
     const [sessions, dropoff, participants, summary, daily, formFunnel, journey] = await Promise.all([
-      getWebinarSessionStats(c.env.DB, id),
-      getWebinarDropoff(c.env.DB, id),
-      getWebinarParticipantStats(c.env.DB, id, 200),
-      getWebinarAnalyticsSummary(c.env.DB, id, completionThreshold),
-      getWebinarDailyStats(c.env.DB, id),
-      getWebinarFormFunnelStats(c.env.DB, id),
-      getWebinarJourneyStats(c.env.DB, id),
+      getWebinarSessionStats(c.env.DB, id, excludeInternal),
+      getWebinarDropoff(c.env.DB, id, excludeInternal),
+      getWebinarParticipantStats(c.env.DB, id, 200, excludeInternal),
+      getWebinarAnalyticsSummary(c.env.DB, id, completionThreshold, excludeInternal),
+      getWebinarDailyStats(c.env.DB, id, excludeInternal),
+      getWebinarFormFunnelStats(c.env.DB, id, excludeInternal),
+      getWebinarJourneyStats(c.env.DB, id, excludeInternal),
     ]);
     return c.json({
       success: true,

@@ -39,6 +39,7 @@ const spec = {
           pictureUrl: { type: 'string', nullable: true },
           statusMessage: { type: 'string', nullable: true },
           isFollowing: { type: 'boolean' },
+          isInternal: { type: 'boolean' },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
           tags: { type: 'array', items: { $ref: '#/components/schemas/Tag' } },
@@ -194,6 +195,24 @@ const spec = {
         summary: '友だち詳細取得',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { '200': { description: 'Friend with tags' }, '404': { description: 'Not found' } },
+      },
+      put: {
+        tags: ['Friends'],
+        summary: '友だちの内部アカウント設定更新',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', properties: { isInternal: { type: 'boolean' } }, required: ['isInternal'] },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Friend updated' },
+          '400': { description: 'Invalid request' },
+          '404': { description: 'Not found' },
+        },
       },
     },
     '/api/friends/{id}/tags': {

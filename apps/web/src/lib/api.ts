@@ -402,6 +402,11 @@ export const api = {
     },
     get: (id: string) =>
       fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}`),
+    update: (id: string, data: { isInternal: boolean }) =>
+      fetchApi<ApiResponse<Friend>>(`/api/friends/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
     mileage: (id: string, limit = 10) =>
       fetchApi<ApiResponse<{ summary: MileageSummary; history: MileageHistoryItem[] }>>(
         `/api/friends/${id}/mileage?limit=${limit}`,
@@ -2304,7 +2309,10 @@ export const webinarApi = {
         })),
       }),
     }),
-  analytics: (id: string) => fetchApi<{ data: WebinarAnalytics }>(`/api/webinars/${id}/analytics`),
+  analytics: (id: string, excludeInternal = false) =>
+    fetchApi<{ data: WebinarAnalytics }>(
+      `/api/webinars/${id}/analytics${excludeInternal ? '?excludeInternal=true' : ''}`,
+    ),
   userComments: (id: string) =>
     fetchApi<{ data: WebinarUserComment[] }>(`/api/webinars/${id}/user-comments`),
 }
