@@ -561,7 +561,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
                     <span className={`h-2 w-2 rounded-full ${stage.dot}`} />
                     {stage.label}
                   </div>
-                  {index > 0 && previous > 0 && stage.conversionValue !== undefined && (
+                  {index > 0 && previous > 0 && stage.innerValue === undefined && stage.conversionValue !== undefined && (
                     <span className="shrink-0 text-[11px] font-medium text-slate-400">
                       {journeyConversionRate(stage.conversionValue, previous)}
                     </span>
@@ -573,7 +573,14 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
                 {stage.innerValue !== undefined && (
                   <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2 text-[11px] text-slate-500">
                     <span>うち案内経由</span>
-                    <span className="font-semibold text-slate-700">{stage.innerValue.toLocaleString('ja-JP')}人</span>
+                    <span className="font-semibold text-slate-700">
+                      {stage.innerValue.toLocaleString('ja-JP')}人
+                      {index > 0 && previous > 0 && (
+                        <span className="ml-1 font-medium text-slate-400">
+                          ({journeyConversionRate(stage.innerValue, previous)})
+                        </span>
+                      )}
+                    </span>
                   </div>
                 )}
                 {isEmpty && <div className="mt-1 text-[11px] font-medium text-amber-700">未到達</div>}
