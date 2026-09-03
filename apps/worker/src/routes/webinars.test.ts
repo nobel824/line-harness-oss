@@ -1447,6 +1447,7 @@ describe('admin CRUD', () => {
     });
     dbMocks.getWebinarJourneyStats.mockResolvedValue({
       picker_opens: 20,
+      picker_opens_from_invite: 7,
       registrations: 12,
       viewers: 8,
       form_submissions: 4,
@@ -1512,6 +1513,7 @@ describe('admin CRUD', () => {
     });
     expect(body.data.journey).toEqual({
       pickerOpens: 20,
+      pickerOpensFromInvite: 7,
       registrations: 12,
       viewers: 8,
       formSubmissions: 4,
