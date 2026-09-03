@@ -2214,6 +2214,38 @@ export type WebinarInput = Partial<Omit<Webinar, 'id' | 'createdAt' | 'updatedAt
 
 export type WebinarSakuraComment = { id?: string; atSeconds: number; authorName: string; body: string }
 
+export type WebinarJourneyStatusCounts = {
+  pending: number
+  sent: number
+  failed: number
+}
+
+export type WebinarJourneyFollowupStatusCounts = WebinarJourneyStatusCounts & {
+  skipped: number
+}
+
+export type WebinarJourneyAnalytics = {
+  entryTagFriends?: number | null
+  inviteTagFriends?: number | null
+  pickerOpens: number
+  /** 旧Workerとのローリングデプロイ互換。 */
+  pickerOpensFromInvite?: number | null
+  registrations: number
+  viewers: number
+  formSubmissions: number
+  followups: {
+    after_30m: WebinarJourneyStatusCounts
+    after_24h: WebinarJourneyStatusCounts
+  }
+  journeyFollowups: {
+    picker_no_registration: WebinarJourneyFollowupStatusCounts
+    registered_no_show: WebinarJourneyFollowupStatusCounts
+    submitted_no_booking_30m: WebinarJourneyFollowupStatusCounts
+    submitted_no_booking_24h: WebinarJourneyFollowupStatusCounts
+    archive_closing: WebinarJourneyFollowupStatusCounts
+  }
+}
+
 export type WebinarAnalytics = {
   summary: {
     reservations: number
@@ -2259,6 +2291,8 @@ export type WebinarAnalytics = {
     submitErrors: number
     fieldCompletions: Array<{ fieldName: string; users: number }>
   }
+  /** 旧Workerとのローリングデプロイ互換。 */
+  journey?: WebinarJourneyAnalytics
 }
 
 export type WebinarUserComment = {

@@ -161,6 +161,7 @@ export type WebinarJourneyFollowupStatus = 'pending' | 'sent' | 'failed' | 'skip
 
 export interface WebinarJourneyStats {
   picker_opens: number;
+  picker_opens_from_invite: number | null;
   registrations: number;
   viewers: number;
   form_submissions: number;
@@ -632,7 +633,14 @@ export async function getWebinarJourneyStats(
     .bind(webinarId)
     .first<Pick<Webinar, 'account_id' | 'funnel_entry_tag_id' | 'funnel_invite_tag_id'>>();
 
-  const [counts, followups, journeyFollowups, entryTagCount, inviteTagCount] = await Promise.all([
+  const [
+    counts,
+    followups,
+    journeyFollowups,
+    entryTagCount,
+    inviteTagCount,
+    pickerOpensFromInviteCount,
+  ] = await Promise.all([
     db
       .prepare(
         `SELECT
@@ -687,6 +695,20 @@ export async function getWebinarJourneyStats(
         .bind(webinar.funnel_invite_tag_id, webinar.account_id)
         .first<WebinarTagFriendCountRow>()
       : Promise.resolve(null),
+    webinar?.funnel_invite_tag_id
+      ? db
+        .prepare(
+          `SELECT COUNT(DISTINCT p.friend_id) AS count
+             FROM webinar_picker_opens p
+             INNER JOIN friend_tags ft ON ft.friend_id = p.friend_id
+             INNER JOIN friends f ON f.id = p.friend_id
+            WHERE p.webinar_id = ?
+              AND ft.tag_id = ?
+              AND f.line_account_id = ?${internalFriendRowFilter('f', excludeInternal)}`,
+        )
+        .bind(webinarId, webinar.funnel_invite_tag_id, webinar.account_id)
+        .first<WebinarTagFriendCountRow>()
+      : Promise.resolve(null),
   ]);
 
   const followupCounts = emptyWebinarFollowupCounts();
@@ -705,6 +727,9 @@ export async function getWebinarJourneyStats(
 
   return {
     picker_opens: counts?.picker_opens ?? 0,
+    picker_opens_from_invite: webinar?.funnel_invite_tag_id
+      ? pickerOpensFromInviteCount?.count ?? 0
+      : null,
     registrations: counts?.registrations ?? 0,
     viewers: counts?.viewers ?? 0,
     form_submissions: counts?.form_submissions ?? 0,
@@ -820,8 +845,14 @@ export async function getWebinarDropoff(
 ): Promise<Array<{ bucket_start: number; viewers: number }>> {
   const { results } = await db
     .prepare(
-      `SELECT (last_position_seconds / 600) * 600 AS bucket_start, COUNT(*) AS viewers
-       FROM webinar_viewers v WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}
+      `WITH viewer_rollup AS (
+         SELECT v.friend_id, MAX(v.last_position_seconds) AS max_position_seconds
+         FROM webinar_viewers v
+         WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}
+         GROUP BY v.friend_id
+       )
+       SELECT (max_position_seconds / 600) * 600 AS bucket_start, COUNT(*) AS viewers
+       FROM viewer_rollup
        GROUP BY bucket_start ORDER BY bucket_start`,
     )
     .bind(webinarId)

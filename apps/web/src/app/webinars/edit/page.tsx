@@ -12,6 +12,7 @@ import {
   type Webinar,
   type WebinarSakuraComment,
   type WebinarAnalytics as BaseWebinarAnalytics,
+  type WebinarJourneyAnalytics,
   type WebinarUserComment,
 } from '@/lib/api'
 
@@ -33,39 +34,6 @@ function fmtSession(epoch: number): string {
 
 const inputClass =
   'w-full border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
-
-type WebinarJourneyStatusCounts = {
-  pending: number
-  sent: number
-  failed: number
-}
-
-type WebinarJourneyFollowupStatusCounts = WebinarJourneyStatusCounts & {
-  skipped: number
-}
-
-type WebinarJourneyAnalytics = {
-  entryTagFriends?: number | null
-  inviteTagFriends?: number | null
-  pickerOpens: number
-  registrations: number
-  viewers: number
-  formSubmissions: number
-  followups: {
-    after_30m: WebinarJourneyStatusCounts
-    after_24h: WebinarJourneyStatusCounts
-  }
-  journeyFollowups: {
-    picker_no_registration: WebinarJourneyFollowupStatusCounts
-    registered_no_show: WebinarJourneyFollowupStatusCounts
-    submitted_no_booking_30m: WebinarJourneyFollowupStatusCounts
-    submitted_no_booking_24h: WebinarJourneyFollowupStatusCounts
-  }
-}
-
-type WebinarAnalyticsWithJourney = BaseWebinarAnalytics & {
-  journey?: WebinarJourneyAnalytics
-}
 
 function CommentsTab({ webinarId }: { webinarId: string }) {
   const [comments, setComments] = useState<WebinarSakuraComment[]>([])
@@ -278,7 +246,7 @@ function ParticipantAvatar({
 }
 
 function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durationSeconds: number }) {
-  const [analytics, setAnalytics] = useState<WebinarAnalyticsWithJourney | null>(null)
+  const [analytics, setAnalytics] = useState<BaseWebinarAnalytics | null>(null)
   const [userComments, setUserComments] = useState<WebinarUserComment[]>([])
   const [error, setError] = useState<string | null>(null)
   const [includeInternal, setIncludeInternal] = useState(false)
@@ -288,7 +256,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
     setAnalytics(null)
     Promise.all([webinarApi.analytics(webinarId, !includeInternal), webinarApi.userComments(webinarId)])
       .then(([analyticsRes, commentsRes]) => {
-        setAnalytics(analyticsRes.data as WebinarAnalyticsWithJourney)
+        setAnalytics(analyticsRes.data)
         setUserComments(commentsRes.data)
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
@@ -307,7 +275,7 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
   // apps/web(Pages) と apps/worker(Workers) は別デプロイなので、web が先に出ると
   // journey が無いレスポンスが返る。分割代入すると分析画面ごと落ちるため、
   // 欠けていたらそのセクションだけ描かない。
-  const journey = analytics.journey ?? null
+  const journey: WebinarJourneyAnalytics | null = analytics.journey ?? null
   const maxDropoff = Math.max(1, ...analytics.dropoff.map((d) => d.viewers))
   const daily = analytics.daily.slice(-14)
   const maxDaily = Math.max(
@@ -324,18 +292,56 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
     { label: '送信完了', value: analytics.formFunnel.submitSuccesses },
   ]
   const maxFormFunnel = Math.max(1, ...formFunnelStages.map((stage) => stage.value))
-  const journeyStages = journey === null ? [] : [
+  type JourneyStage = {
+    label: string
+    value: number
+    dot: string
+    conversionValue: number | undefined
+    innerValue?: number
+  }
+  const journeyStages: JourneyStage[] = journey === null ? [] : [
     journey.entryTagFriends == null
       ? null
-      : { label: '特典請求', value: journey.entryTagFriends, dot: 'bg-amber-500' },
+      : {
+          label: '特典請求',
+          value: journey.entryTagFriends,
+          dot: 'bg-amber-500',
+          conversionValue: journey.entryTagFriends,
+        },
     journey.inviteTagFriends == null
       ? null
-      : { label: 'ウェビナー案内クリック', value: journey.inviteTagFriends, dot: 'bg-orange-500' },
-    { label: 'ピッカー表示', value: journey.pickerOpens, dot: 'bg-slate-500' },
-    { label: 'ウェビナー予約', value: journey.registrations, dot: 'bg-blue-500' },
-    { label: '視聴開始', value: journey.viewers, dot: 'bg-cyan-500' },
-    { label: 'フォーム送信', value: journey.formSubmissions, dot: 'bg-emerald-500' },
-  ].filter((stage): stage is { label: string; value: number; dot: string } => stage !== null)
+      : {
+          label: 'ウェビナー案内クリック',
+          value: journey.inviteTagFriends,
+          dot: 'bg-orange-500',
+          conversionValue: journey.inviteTagFriends,
+        },
+    {
+      label: 'ピッカー表示',
+      value: journey.pickerOpens,
+      dot: 'bg-slate-500',
+      conversionValue: journey.pickerOpensFromInvite ?? undefined,
+      innerValue: journey.pickerOpensFromInvite ?? undefined,
+    },
+    {
+      label: 'ウェビナー予約',
+      value: journey.registrations,
+      dot: 'bg-blue-500',
+      conversionValue: journey.registrations,
+    },
+    {
+      label: '視聴開始',
+      value: journey.viewers,
+      dot: 'bg-cyan-500',
+      conversionValue: journey.viewers,
+    },
+    {
+      label: 'フォーム送信',
+      value: journey.formSubmissions,
+      dot: 'bg-emerald-500',
+      conversionValue: journey.formSubmissions,
+    },
+  ].filter((stage): stage is NonNullable<typeof stage> => stage !== null)
   const followupStatuses = [
     { key: 'pending', label: '待ち' },
     { key: 'sent', label: '送信済み' },
@@ -555,15 +561,21 @@ function AnalyticsTab({ webinarId, durationSeconds }: { webinarId: string; durat
                     <span className={`h-2 w-2 rounded-full ${stage.dot}`} />
                     {stage.label}
                   </div>
-                  {index > 0 && previous > 0 && (
+                  {index > 0 && previous > 0 && stage.conversionValue !== undefined && (
                     <span className="shrink-0 text-[11px] font-medium text-slate-400">
-                      {journeyConversionRate(stage.value, previous)}
+                      {journeyConversionRate(stage.conversionValue, previous)}
                     </span>
                   )}
                 </div>
                 <div className={`mt-2 text-2xl font-bold ${isEmpty ? 'text-amber-700' : 'text-slate-950'}`}>
                   {stage.value.toLocaleString('ja-JP')}人
                 </div>
+                {stage.innerValue !== undefined && (
+                  <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2 text-[11px] text-slate-500">
+                    <span>うち案内経由</span>
+                    <span className="font-semibold text-slate-700">{stage.innerValue.toLocaleString('ja-JP')}人</span>
+                  </div>
+                )}
                 {isEmpty && <div className="mt-1 text-[11px] font-medium text-amber-700">未到達</div>}
               </div>
             )

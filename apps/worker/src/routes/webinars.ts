@@ -1365,6 +1365,7 @@ webinarRoutes.get('/api/webinars/:id/analytics', async (c) => {
           formSubmissions: journey.form_submissions,
           entryTagFriends: journey.entry_tag_friends,
           inviteTagFriends: journey.invite_tag_friends,
+          pickerOpensFromInvite: journey.picker_opens_from_invite,
           followups: journey.followups,
           journeyFollowups: journey.journey_followups,
         },
