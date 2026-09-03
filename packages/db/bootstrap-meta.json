@@ -84,7 +84,8 @@
     "075_webinar_journey_archive_closing.sql",
     "076_webinar_admin_notify_line_user_id.sql",
     "077_webinar_funnel_upstream_tags.sql",
-    "078_friend_internal.sql"
+    "078_friend_internal.sql",
+    "079_webinar_registration_day_before_reminder.sql"
   ],
-  "migrationCount": 85
+  "migrationCount": 86
 }

@@ -1092,6 +1092,7 @@ export interface WebinarRegistration {
   friend_id: string;
   session_start_at: number;
   notified_at: string | null;
+  reminded_day_before_at: string | null;
   created_at: string;
 }
 
@@ -1208,6 +1209,29 @@ export async function getDueWebinarRegistrations(
   return results ?? [];
 }
 
+/** 前日リマインドの粗い未来候補。正確な前日20時の判定はworker側で行う。 */
+export async function getDueDayBeforeWebinarRegistrations(
+  db: D1Database,
+  nowEpochSeconds: number,
+  limit = 100,
+): Promise<Array<WebinarRegistration & { slug: string; title: string; account_id: string | null; duration_seconds: number }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT r.*, w.slug, w.title, w.account_id, w.duration_seconds
+       FROM webinar_registrations r
+       JOIN webinars w ON w.id = r.webinar_id
+       WHERE r.reminded_day_before_at IS NULL
+         AND w.status = 'active'
+         AND r.session_start_at > ?
+         AND r.session_start_at <= ?
+       ORDER BY r.session_start_at ASC
+       LIMIT ?`,
+    )
+    .bind(nowEpochSeconds, nowEpochSeconds + 28 * 60 * 60 + 4 * 60 * 60, limit)
+    .all<WebinarRegistration & { slug: string; title: string; account_id: string | null; duration_seconds: number }>();
+  return results ?? [];
+}
+
 /** 通知済みマーク。未通知の場合のみ更新し、更新できたら true (二重送信ガード) */
 export async function markWebinarRegistrationNotified(
   db: D1Database,
@@ -1216,6 +1240,22 @@ export async function markWebinarRegistrationNotified(
   const res = await db
     .prepare(
       `UPDATE webinar_registrations SET notified_at = ? WHERE id = ? AND notified_at IS NULL`,
+    )
+    .bind(jstNow(), id)
+    .run();
+  return (res.meta.changes ?? 0) > 0;
+}
+
+/** 前日リマインド済みマーク。未通知の場合のみ更新し、更新できたら true。 */
+export async function markWebinarRegistrationDayBeforeReminded(
+  db: D1Database,
+  id: string,
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      `UPDATE webinar_registrations
+          SET reminded_day_before_at = ?
+        WHERE id = ? AND reminded_day_before_at IS NULL`,
     )
     .bind(jstNow(), id)
     .run();

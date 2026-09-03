@@ -1122,7 +1122,7 @@ CREATE TABLE IF NOT EXISTS webinar_registrations (
   friend_id TEXT NOT NULL REFERENCES friends(id),
   session_start_at INTEGER NOT NULL,
   notified_at TEXT,
-  created_at TEXT NOT NULL,
+  created_at TEXT NOT NULL, reminded_day_before_at TEXT,
   UNIQUE (webinar_id, friend_id, session_start_at)
 );
 
@@ -1415,6 +1415,9 @@ CREATE INDEX IF NOT EXISTS idx_webinar_journey_followups_status
 
 CREATE INDEX IF NOT EXISTS idx_webinar_picker_opens_opened
   ON webinar_picker_opens (webinar_id, opened_at);
+
+CREATE INDEX IF NOT EXISTS idx_webinar_regs_day_before_due
+  ON webinar_registrations (reminded_day_before_at, session_start_at);
 
 CREATE INDEX IF NOT EXISTS idx_webinar_regs_due
   ON webinar_registrations (notified_at, session_start_at);
