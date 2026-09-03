@@ -131,6 +131,7 @@ describe('buildJourneyFollowupText', () => {
       'picker_no_registration', 'AI導入ライブ', pickerUrl, bookingUrl,
     );
     expect(text).toContain('20時から開催');
+    expect(text).toContain('前日と開始5分前に専用の入場リンクがLINEに届きます。');
     expect(text).toContain(pickerUrl);
     expect(text).not.toContain(bookingUrl);
   });

@@ -2,7 +2,9 @@ import { describe, expect, test, beforeEach, vi } from 'vitest';
 
 const dbMocks = {
   getDueWebinarRegistrations: vi.fn(),
+  getDueDayBeforeWebinarRegistrations: vi.fn(),
   markWebinarRegistrationNotified: vi.fn(),
+  markWebinarRegistrationDayBeforeReminded: vi.fn(),
   getFriendById: vi.fn(),
   getLineAccountById: vi.fn(),
 };
@@ -14,8 +16,14 @@ const { processWebinarReminders, sendWebinarRegistrationConfirmation, buildWebin
 const NOW = 1_800_000_000;
 const REG = {
   id: 'reg-1', webinar_id: 'w1', friend_id: 'friend-1',
-  session_start_at: NOW + 240, notified_at: null, created_at: 'x',
+  session_start_at: NOW + 240, notified_at: null, reminded_day_before_at: null, created_at: 'x',
   slug: 'test-webinar', title: 'テスト', account_id: 'acc-1', duration_seconds: 1200,
+};
+const epoch = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+const DAY_BEFORE_REG = {
+  ...REG,
+  id: 'reg-day-before',
+  session_start_at: epoch('2026-09-05T20:00:00+09:00'),
 };
 const OPTIONS = {
   proxyBaseUrl: 'https://proxy.example.com/',
@@ -29,11 +37,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(new Date(NOW * 1000));
+  dbMocks.getDueWebinarRegistrations.mockResolvedValue([]);
+  dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue([]);
   dbMocks.getFriendById.mockResolvedValue({ id: 'friend-1', line_user_id: 'U1', is_following: 1 });
   dbMocks.getLineAccountById.mockResolvedValue({
     id: 'acc-1', channel_access_token: 'tok', liff_id: '111-aaa',
   });
   dbMocks.markWebinarRegistrationNotified.mockResolvedValue(true);
+  dbMocks.markWebinarRegistrationDayBeforeReminded.mockResolvedValue(true);
   proxyFetch.mockResolvedValue(new Response(null, { status: 200 }));
   vi.stubGlobal('fetch', proxyFetch);
 });
@@ -43,6 +54,7 @@ describe('processWebinarReminders', () => {
     dbMocks.getDueWebinarRegistrations.mockResolvedValue([REG]);
     const result = await processWebinarReminders({} as D1Database, OPTIONS);
     expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(dbMocks.getDueWebinarRegistrations).toHaveBeenCalledWith(expect.anything(), NOW, 300);
     expect(dbMocks.markWebinarRegistrationNotified).toHaveBeenCalledWith(expect.anything(), 'reg-1');
     expect(proxyFetch).toHaveBeenCalledTimes(1);
     const [url, init] = proxyFetch.mock.calls[0] as [string, RequestInit];
@@ -126,6 +138,118 @@ describe('processWebinarReminders', () => {
     const body = JSON.parse(String(init.body)) as { messages: Array<{ text: string }> };
     expect(body.messages[0].text).toContain('始まりました');
   });
+
+  test('前日20時の窓に入った予約へ専用本文を送り、前日リマインド済みを刻む', async () => {
+    vi.setSystemTime(new Date('2026-09-04T20:05:00+09:00'));
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue([DAY_BEFORE_REG]);
+
+    const result = await processWebinarReminders({} as D1Database, OPTIONS);
+
+    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).toHaveBeenCalledWith(
+      expect.anything(), DAY_BEFORE_REG.id,
+    );
+    const [, init] = proxyFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as { messages: Array<{ text: string }> };
+    expect(body.messages[0].text).toBe(
+      `📅 明日 9月5日(土) 20:00 の回にご予約いただいています\n\n` +
+      `「テスト」\n\n` +
+      `専用の入場リンクです👇\n` +
+      `${buildWebinarUrl('111-aaa', 'test-webinar', DAY_BEFORE_REG.session_start_at)}\n\n` +
+      `開始5分前にも同じリンクをお送りします。\n` +
+      `※約57分です。カメラ・マイクは使いません。`,
+    );
+    expect(init.headers).toMatchObject({ 'X-Line-Retry-Key': 'reg-day-before:day_before' });
+  });
+
+  test('同じ tick を2回処理しても前日リマインドは2通送らない', async () => {
+    vi.setSystemTime(new Date('2026-09-04T20:05:00+09:00'));
+    let reminded = false;
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockImplementation(async () => (
+      reminded ? [] : [DAY_BEFORE_REG]
+    ));
+    dbMocks.markWebinarRegistrationDayBeforeReminded.mockImplementation(async () => {
+      if (reminded) return false;
+      reminded = true;
+      return true;
+    });
+
+    await processWebinarReminders({} as D1Database, OPTIONS);
+    await processWebinarReminders({} as D1Database, OPTIONS);
+
+    expect(proxyFetch).toHaveBeenCalledTimes(1);
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).toHaveBeenCalledTimes(1);
+  });
+
+  test('前日リマインドの猶予4時間を過ぎた予約は送らずに消化する', async () => {
+    vi.setSystemTime(new Date('2026-09-05T00:01:00+09:00'));
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue([DAY_BEFORE_REG]);
+
+    const result = await processWebinarReminders({} as D1Database, OPTIONS);
+
+    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(proxyFetch).not.toHaveBeenCalled();
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).toHaveBeenCalledWith(
+      expect.anything(), DAY_BEFORE_REG.id,
+    );
+  });
+
+  test('エポックガードより前のトリガー時刻の予約は送らず、消化もしない', async () => {
+    vi.setSystemTime(new Date('2026-09-03T22:00:00+09:00'));
+    const beforeEpochReg = {
+      ...DAY_BEFORE_REG,
+      id: 'reg-before-epoch',
+      session_start_at: epoch('2026-09-04T20:00:00+09:00'),
+    };
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue([beforeEpochReg]);
+
+    const result = await processWebinarReminders({} as D1Database, OPTIONS);
+
+    expect(result).toEqual({ sent: 0, failed: 0 });
+    expect(proxyFetch).not.toHaveBeenCalled();
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).not.toHaveBeenCalled();
+  });
+
+  test('1 tickの前日リマインド対象が20件を超えたら送信せずbailする', async () => {
+    vi.setSystemTime(new Date('2026-09-04T20:05:00+09:00'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue(
+      Array.from({ length: 21 }, (_, index) => ({ ...DAY_BEFORE_REG, id: `reg-${index}` })),
+    );
+    // bail するのは前日リマインドだけで、入場リンク本体の5分前は止めない。
+    dbMocks.getDueWebinarRegistrations.mockResolvedValue([
+      { ...REG, id: 'reg-five-minute', session_start_at: epoch('2026-09-04T20:09:00+09:00') },
+    ]);
+
+    const result = await processWebinarReminders({} as D1Database, OPTIONS);
+
+    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(proxyFetch).toHaveBeenCalledTimes(1);
+    expect(dbMocks.markWebinarRegistrationDayBeforeReminded).not.toHaveBeenCalled();
+    expect(dbMocks.markWebinarRegistrationNotified).toHaveBeenCalledWith({}, 'reg-five-minute');
+    expect(error).toHaveBeenCalled();
+  });
+
+  test('前日と5分前でX-Line-Retry-Keyを分け、5分前側の状態は従来どおり刻む', async () => {
+    vi.setSystemTime(new Date('2026-09-04T20:05:00+09:00'));
+    const fiveMinuteReg = {
+      ...REG,
+      id: 'reg-five-minute',
+      session_start_at: epoch('2026-09-04T20:09:00+09:00'),
+    };
+    dbMocks.getDueDayBeforeWebinarRegistrations.mockResolvedValue([DAY_BEFORE_REG]);
+    dbMocks.getDueWebinarRegistrations.mockResolvedValue([fiveMinuteReg]);
+
+    await processWebinarReminders({} as D1Database, OPTIONS);
+
+    const retryKeys = proxyFetch.mock.calls.map(([, init]) => (
+      (init as RequestInit).headers as Record<string, string>
+    )['X-Line-Retry-Key']);
+    expect(retryKeys).toEqual(['reg-day-before:day_before', 'reg-five-minute']);
+    expect(dbMocks.markWebinarRegistrationNotified).toHaveBeenCalledWith(
+      expect.anything(), fiveMinuteReg.id,
+    );
+  });
 });
 
 describe('sendWebinarRegistrationConfirmation', () => {
@@ -147,7 +271,7 @@ describe('sendWebinarRegistrationConfirmation', () => {
       buildWebinarUrl('111-aaa', 'test-webinar', NOW + 3600),
     );
     expect(body.messages[0].text).toContain('専用の入場リンク');
-    expect(body.messages[0].text).toContain('開始5分前にも同じリンクをお送りします。');
+    expect(body.messages[0].text).toContain('前日20時と、開始5分前に、同じリンクをもう一度お送りします。');
     expect(body.messages[0].text).not.toContain('配信のあと3日間は、このリンクから見返せます。');
     expect(body.messages[0].text).not.toContain('何度でも開けます');
   });
