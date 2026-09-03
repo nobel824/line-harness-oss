@@ -86,6 +86,8 @@ type JourneyFollowupRow = {
   status: 'pending' | 'sent' | 'failed' | 'skipped';
 };
 
+const NEAR_COMPLETE_SECONDS = 60;
+
 function formUrl(liffId: string, formId: string): string {
   return (
     `https://liff.line.me/${liffId}/?page=form&id=${encodeURIComponent(formId)}` +
@@ -102,7 +104,7 @@ function webinarPickerUrl(liffId: string, slug: string): string {
 
 function remainingWatchLine(durationSeconds: number, lastPositionSeconds: number): string {
   const remainingSeconds = Math.max(0, durationSeconds - lastPositionSeconds);
-  if (remainingSeconds < 60) return '※残りはあと少しです。';
+  if (remainingSeconds < NEAR_COMPLETE_SECONDS) return '※残りはあと少しです。';
   return `※残りは約${Math.round(remainingSeconds / 60)}分です。`;
 }
 
@@ -112,11 +114,21 @@ function buildRegisteredNoShowText(
   watch?: RegisteredNoShowWatch,
 ): string | null {
   const lastPosition = watch?.lastPositionSeconds ?? null;
-  const ctaAt = watch?.formCtaAtSeconds ?? null;
-  if (lastPosition !== null && ctaAt !== null && lastPosition >= ctaAt) {
+  // CTAの表示位置は演出上の値なので、残り1分未満の実質完走者だけを送信対象から外す。
+  if (
+    watch &&
+    lastPosition !== null &&
+    lastPosition > 0 &&
+    watch.durationSeconds - lastPosition < NEAR_COMPLETE_SECONDS
+  ) {
     return null;
   }
-  if (lastPosition !== null && lastPosition > 0 && ctaAt !== null && lastPosition < ctaAt && watch) {
+  if (
+    watch &&
+    lastPosition !== null &&
+    lastPosition > 0 &&
+    watch.durationSeconds - lastPosition >= NEAR_COMPLETE_SECONDS
+  ) {
     return (
       `「${title}」の続きがまだ残っています。\n\n` +
       `いちばんお伝えしたいのは終盤です。\n` +
@@ -416,20 +428,12 @@ export async function journeyCandidates(
            )
            -- 遅延だけで判定すると配信中に追客が飛ぶため、回の終了後に限定する。
            AND r.session_start_at + w.duration_seconds <= unixepoch(?)
+           -- CTAの表示位置は演出上の値なので、クリックした本人だけを追客対象から外す。
            AND NOT EXISTS (
              SELECT 1 FROM webinar_viewers v
              WHERE v.webinar_id = r.webinar_id AND v.friend_id = r.friend_id
                AND v.session_start_at = r.session_start_at
-               -- form CTA が無いウェビナーでは MIN() が NULL になり比較が NULL に
-               -- 評価されるため、視聴済みの人まで候補に残って「お会いできません
-               -- でした」が飛ぶ。COALESCE(0) で「見たら除外」の従来挙動に戻す。
-               AND v.last_position_seconds >= COALESCE(
-                 (
-                   SELECT MIN(wc.at_seconds) FROM webinar_ctas wc
-                   WHERE wc.webinar_id = r.webinar_id AND wc.kind = 'form'
-                 ),
-                 0
-               )
+               AND v.cta_clicked_at IS NOT NULL
            )
          GROUP BY r.webinar_id, r.friend_id
        )
@@ -820,7 +824,7 @@ export async function processWebinarFollowups(
       if (text === null) {
         await db.prepare(
           `UPDATE webinar_journey_followups
-           SET status = 'skipped', last_error = 'cta_reached', updated_at = ? WHERE id = ?`,
+           SET status = 'skipped', last_error = 'watched_to_end', updated_at = ? WHERE id = ?`,
         ).bind(jstNow(), followup.id).run();
         continue;
       }
