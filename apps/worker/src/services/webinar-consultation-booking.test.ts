@@ -22,6 +22,8 @@ vi.mock('./meet-consultation-reminders.js', () => ({
 }));
 vi.mock('./line-proxy-send.js', () => ({ pushViaHarnessProxy: mocks.pushViaHarnessProxy }));
 
+const RETRY_KEY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const {
   bookWebinarConsultation,
   getWebinarConsultationAvailability,
@@ -188,7 +190,8 @@ describe('bookWebinarConsultation', () => {
     expect(adminText).toContain('日時: 8月20日(木) 10:00');
     expect(adminText).toContain('Meet: https://meet.google.com/abc-defg-hij');
     expect(adminText).toContain('お名前: 予約者');
-    expect(adminCall![4]).toBe(`${result.bookingId}:admin`);
+    expect(adminCall![4]).toMatch(RETRY_KEY_UUID);
+    expect(adminCall![4]).not.toBe(result.bookingId);
   });
 
   test('DBの運営者通知先がNULLなら環境変数の宛先へフォールバックする', async () => {
