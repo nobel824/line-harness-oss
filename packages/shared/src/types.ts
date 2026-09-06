@@ -26,6 +26,8 @@ export interface Friend {
    * D1はBOOLEANをINTEGER(0/1)で格納するが、Cloudflare D1クライアントはJavaScript boolean に変換して返す
    */
   isFollowing: boolean;
+  /** 内部アカウントとして分析集計から除外するかどうか */
+  isInternal?: boolean;
   /** メタデータ (フォーム回答, 業種等). serializeFriend が JSON.parse 済 */
   metadata?: Record<string, unknown>;
   /** 流入経路 ref コード (?ref=… で渡されたトラッキング識別子). 設定無しなら null */

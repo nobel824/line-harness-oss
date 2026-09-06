@@ -402,6 +402,11 @@ export const api = {
     },
     get: (id: string) =>
       fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}`),
+    update: (id: string, data: { isInternal: boolean }) =>
+      fetchApi<ApiResponse<Friend>>(`/api/friends/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
     mileage: (id: string, limit = 10) =>
       fetchApi<ApiResponse<{ summary: MileageSummary; history: MileageHistoryItem[] }>>(
         `/api/friends/${id}/mileage?limit=${limit}`,
@@ -2209,6 +2214,38 @@ export type WebinarInput = Partial<Omit<Webinar, 'id' | 'createdAt' | 'updatedAt
 
 export type WebinarSakuraComment = { id?: string; atSeconds: number; authorName: string; body: string }
 
+export type WebinarJourneyStatusCounts = {
+  pending: number
+  sent: number
+  failed: number
+}
+
+export type WebinarJourneyFollowupStatusCounts = WebinarJourneyStatusCounts & {
+  skipped: number
+}
+
+export type WebinarJourneyAnalytics = {
+  entryTagFriends?: number | null
+  inviteTagFriends?: number | null
+  pickerOpens: number
+  /** 旧Workerとのローリングデプロイ互換。 */
+  pickerOpensFromInvite?: number | null
+  registrations: number
+  viewers: number
+  formSubmissions: number
+  followups: {
+    after_30m: WebinarJourneyStatusCounts
+    after_24h: WebinarJourneyStatusCounts
+  }
+  journeyFollowups: {
+    picker_no_registration: WebinarJourneyFollowupStatusCounts
+    registered_no_show: WebinarJourneyFollowupStatusCounts
+    submitted_no_booking_30m: WebinarJourneyFollowupStatusCounts
+    submitted_no_booking_24h: WebinarJourneyFollowupStatusCounts
+    archive_closing: WebinarJourneyFollowupStatusCounts
+  }
+}
+
 export type WebinarAnalytics = {
   summary: {
     reservations: number
@@ -2254,6 +2291,8 @@ export type WebinarAnalytics = {
     submitErrors: number
     fieldCompletions: Array<{ fieldName: string; users: number }>
   }
+  /** 旧Workerとのローリングデプロイ互換。 */
+  journey?: WebinarJourneyAnalytics
 }
 
 export type WebinarUserComment = {
@@ -2304,7 +2343,10 @@ export const webinarApi = {
         })),
       }),
     }),
-  analytics: (id: string) => fetchApi<{ data: WebinarAnalytics }>(`/api/webinars/${id}/analytics`),
+  analytics: (id: string, excludeInternal = false) =>
+    fetchApi<{ data: WebinarAnalytics }>(
+      `/api/webinars/${id}/analytics${excludeInternal ? '?excludeInternal=true' : ''}`,
+    ),
   userComments: (id: string) =>
     fetchApi<{ data: WebinarUserComment[] }>(`/api/webinars/${id}/user-comments`),
 }

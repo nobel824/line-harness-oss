@@ -1,5 +1,18 @@
 import { jstNow } from './utils.js';
 
+function internalFriendFilter(alias: string, excludeInternal: boolean): string {
+  if (!excludeInternal) return '';
+  return ` AND NOT EXISTS (
+           SELECT 1 FROM friends internal_friend
+           WHERE internal_friend.id = ${alias}.friend_id
+             AND internal_friend.is_internal = 1
+         )`;
+}
+
+function internalFriendRowFilter(alias: string, excludeInternal: boolean): string {
+  return excludeInternal ? ` AND ${alias}.is_internal = 0` : '';
+}
+
 export interface Webinar {
   id: string;
   account_id: string | null;
@@ -148,6 +161,7 @@ export type WebinarJourneyFollowupStatus = 'pending' | 'sent' | 'failed' | 'skip
 
 export interface WebinarJourneyStats {
   picker_opens: number;
+  picker_opens_from_invite: number | null;
   registrations: number;
   viewers: number;
   form_submissions: number;
@@ -481,6 +495,7 @@ export async function recordWebinarFunnelEvent(
 export async function getWebinarFormFunnelStats(
   db: D1Database,
   webinarId: string,
+  excludeInternal = false,
 ): Promise<WebinarFormFunnelStats> {
   const [summary, fields] = await Promise.all([
     db
@@ -498,26 +513,26 @@ export async function getWebinarFormFunnelStats(
             FROM webinar_viewers v, config, first_cta
             WHERE v.webinar_id = ?
               AND datetime(v.joined_at) >= datetime(config.enabled_at)
-              AND v.last_position_seconds >= first_cta.at_seconds) AS cta_impressions,
+              AND v.last_position_seconds >= first_cta.at_seconds${internalFriendFilter('v', excludeInternal)}) AS cta_impressions,
            (SELECT COUNT(DISTINCT v.friend_id)
             FROM webinar_viewers v, config
             WHERE v.webinar_id = ? AND v.cta_clicked_at IS NOT NULL
-              AND datetime(v.cta_clicked_at) >= datetime(config.enabled_at)) AS cta_clicks,
+              AND datetime(v.cta_clicked_at) >= datetime(config.enabled_at)${internalFriendFilter('v', excludeInternal)}) AS cta_clicks,
            (SELECT COUNT(DISTINCT fo.friend_id)
             FROM form_opens fo, config
             WHERE fo.form_id IN (SELECT form_id FROM tracked_forms)
               AND fo.friend_id IS NOT NULL
-              AND datetime(fo.opened_at) >= datetime(config.enabled_at)) AS form_opens,
+              AND datetime(fo.opened_at) >= datetime(config.enabled_at)${internalFriendFilter('fo', excludeInternal)}) AS form_opens,
            (SELECT COUNT(DISTINCT e.friend_id) FROM webinar_funnel_events e
-            WHERE e.webinar_id = ? AND e.event_type = 'form_start') AS form_starts,
+            WHERE e.webinar_id = ? AND e.event_type = 'form_start'${internalFriendFilter('e', excludeInternal)}) AS form_starts,
            (SELECT COUNT(DISTINCT e.friend_id) FROM webinar_funnel_events e
-            WHERE e.webinar_id = ? AND e.event_type = 'submit_attempt') AS submit_attempts,
+            WHERE e.webinar_id = ? AND e.event_type = 'submit_attempt'${internalFriendFilter('e', excludeInternal)}) AS submit_attempts,
            (SELECT COUNT(DISTINCT fs.friend_id)
             FROM form_submissions fs, config
             WHERE fs.form_id IN (SELECT form_id FROM tracked_forms)
-              AND datetime(fs.created_at) >= datetime(config.enabled_at)) AS submit_successes,
+              AND datetime(fs.created_at) >= datetime(config.enabled_at)${internalFriendFilter('fs', excludeInternal)}) AS submit_successes,
            (SELECT COUNT(DISTINCT e.friend_id) FROM webinar_funnel_events e
-            WHERE e.webinar_id = ? AND e.event_type = 'submit_error') AS submit_errors`,
+            WHERE e.webinar_id = ? AND e.event_type = 'submit_error'${internalFriendFilter('e', excludeInternal)}) AS submit_errors`,
       )
       .bind(
         webinarId, webinarId, webinarId, webinarId, webinarId,
@@ -526,11 +541,11 @@ export async function getWebinarFormFunnelStats(
       .first<Omit<WebinarFormFunnelStats, 'field_completions'>>(),
     db
       .prepare(
-        `SELECT field_name, COUNT(DISTINCT friend_id) AS users
-         FROM webinar_funnel_events
-         WHERE webinar_id = ? AND event_type = 'field_complete' AND field_name <> ''
-         GROUP BY field_name
-         ORDER BY users DESC, field_name ASC`,
+        `SELECT e.field_name, COUNT(DISTINCT e.friend_id) AS users
+         FROM webinar_funnel_events e
+         WHERE e.webinar_id = ? AND e.event_type = 'field_complete' AND e.field_name <> ''${internalFriendFilter('e', excludeInternal)}
+         GROUP BY e.field_name
+         ORDER BY users DESC, e.field_name ASC`,
       )
       .bind(webinarId)
       .all<{ field_name: string; users: number }>(),
@@ -607,6 +622,7 @@ function emptyWebinarJourneyFollowupCounts(): WebinarJourneyStats['journey_follo
 export async function getWebinarJourneyStats(
   db: D1Database,
   webinarId: string,
+  excludeInternal = false,
 ): Promise<WebinarJourneyStats> {
   const webinar = await db
     .prepare(
@@ -617,26 +633,33 @@ export async function getWebinarJourneyStats(
     .bind(webinarId)
     .first<Pick<Webinar, 'account_id' | 'funnel_entry_tag_id' | 'funnel_invite_tag_id'>>();
 
-  const [counts, followups, journeyFollowups, entryTagCount, inviteTagCount] = await Promise.all([
+  const [
+    counts,
+    followups,
+    journeyFollowups,
+    entryTagCount,
+    inviteTagCount,
+    pickerOpensFromInviteCount,
+  ] = await Promise.all([
     db
       .prepare(
         `SELECT
-           (SELECT COUNT(DISTINCT friend_id) FROM webinar_picker_opens WHERE webinar_id = ?) AS picker_opens,
-           (SELECT COUNT(DISTINCT friend_id) FROM webinar_registrations WHERE webinar_id = ?) AS registrations,
-           (SELECT COUNT(DISTINCT friend_id) FROM webinar_viewers WHERE webinar_id = ?) AS viewers,
+           (SELECT COUNT(DISTINCT friend_id) FROM webinar_picker_opens p WHERE p.webinar_id = ?${internalFriendFilter('p', excludeInternal)}) AS picker_opens,
+           (SELECT COUNT(DISTINCT friend_id) FROM webinar_registrations r WHERE r.webinar_id = ?${internalFriendFilter('r', excludeInternal)}) AS registrations,
+           (SELECT COUNT(DISTINCT friend_id) FROM webinar_viewers v WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}) AS viewers,
            (SELECT COUNT(DISTINCT fs.friend_id) FROM form_submissions fs
             WHERE EXISTS (
               SELECT 1 FROM webinar_ctas wc
               WHERE wc.webinar_id = ? AND wc.form_id IS NOT NULL AND wc.form_id = fs.form_id
-            )) AS form_submissions`,
+            )${internalFriendFilter('fs', excludeInternal)}) AS form_submissions`,
       )
       .bind(webinarId, webinarId, webinarId, webinarId)
       .first<WebinarJourneyCountRow>(),
     db
       .prepare(
         `SELECT kind, status, COUNT(*) AS count
-         FROM webinar_followups
-         WHERE webinar_id = ?
+         FROM webinar_followups wf
+         WHERE wf.webinar_id = ?${internalFriendFilter('wf', excludeInternal)}
          GROUP BY kind, status`,
       )
       .bind(webinarId)
@@ -644,8 +667,8 @@ export async function getWebinarJourneyStats(
     db
       .prepare(
         `SELECT kind, status, COUNT(*) AS count
-         FROM webinar_journey_followups
-         WHERE webinar_id = ?
+         FROM webinar_journey_followups jf
+         WHERE jf.webinar_id = ?${internalFriendFilter('jf', excludeInternal)}
          GROUP BY kind, status`,
       )
       .bind(webinarId)
@@ -656,7 +679,7 @@ export async function getWebinarJourneyStats(
           `SELECT COUNT(DISTINCT f.id) AS count
              FROM friend_tags ft
              INNER JOIN friends f ON f.id = ft.friend_id
-            WHERE ft.tag_id = ? AND f.line_account_id = ?`,
+            WHERE ft.tag_id = ? AND f.line_account_id = ?${internalFriendRowFilter('f', excludeInternal)}`,
         )
         .bind(webinar.funnel_entry_tag_id, webinar.account_id)
         .first<WebinarTagFriendCountRow>()
@@ -667,9 +690,23 @@ export async function getWebinarJourneyStats(
           `SELECT COUNT(DISTINCT f.id) AS count
              FROM friend_tags ft
              INNER JOIN friends f ON f.id = ft.friend_id
-            WHERE ft.tag_id = ? AND f.line_account_id = ?`,
+            WHERE ft.tag_id = ? AND f.line_account_id = ?${internalFriendRowFilter('f', excludeInternal)}`,
         )
         .bind(webinar.funnel_invite_tag_id, webinar.account_id)
+        .first<WebinarTagFriendCountRow>()
+      : Promise.resolve(null),
+    webinar?.funnel_invite_tag_id
+      ? db
+        .prepare(
+          `SELECT COUNT(DISTINCT p.friend_id) AS count
+             FROM webinar_picker_opens p
+             INNER JOIN friend_tags ft ON ft.friend_id = p.friend_id
+             INNER JOIN friends f ON f.id = p.friend_id
+            WHERE p.webinar_id = ?
+              AND ft.tag_id = ?
+              AND f.line_account_id = ?${internalFriendRowFilter('f', excludeInternal)}`,
+        )
+        .bind(webinarId, webinar.funnel_invite_tag_id, webinar.account_id)
         .first<WebinarTagFriendCountRow>()
       : Promise.resolve(null),
   ]);
@@ -690,6 +727,9 @@ export async function getWebinarJourneyStats(
 
   return {
     picker_opens: counts?.picker_opens ?? 0,
+    picker_opens_from_invite: webinar?.funnel_invite_tag_id
+      ? pickerOpensFromInviteCount?.count ?? 0
+      : null,
     registrations: counts?.registrations ?? 0,
     viewers: counts?.viewers ?? 0,
     form_submissions: counts?.form_submissions ?? 0,
@@ -779,6 +819,7 @@ export async function getMyWebinarSessionComments(
 export async function getWebinarSessionStats(
   db: D1Database,
   webinarId: string,
+  excludeInternal = false,
 ): Promise<WebinarSessionStat[]> {
   const { results } = await db
     .prepare(
@@ -786,8 +827,8 @@ export async function getWebinarSessionStats(
               COUNT(*) AS viewers,
               CAST(AVG(last_position_seconds) AS INTEGER) AS avg_watched_seconds,
               SUM(CASE WHEN cta_clicked_at IS NOT NULL THEN 1 ELSE 0 END) AS cta_clicks
-       FROM webinar_viewers
-       WHERE webinar_id = ?
+       FROM webinar_viewers v
+       WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}
        GROUP BY session_start_at
        ORDER BY session_start_at DESC`,
     )
@@ -800,11 +841,18 @@ export async function getWebinarSessionStats(
 export async function getWebinarDropoff(
   db: D1Database,
   webinarId: string,
+  excludeInternal = false,
 ): Promise<Array<{ bucket_start: number; viewers: number }>> {
   const { results } = await db
     .prepare(
-      `SELECT (last_position_seconds / 600) * 600 AS bucket_start, COUNT(*) AS viewers
-       FROM webinar_viewers WHERE webinar_id = ?
+      `WITH viewer_rollup AS (
+         SELECT v.friend_id, MAX(v.last_position_seconds) AS max_position_seconds
+         FROM webinar_viewers v
+         WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}
+         GROUP BY v.friend_id
+       )
+       SELECT (max_position_seconds / 600) * 600 AS bucket_start, COUNT(*) AS viewers
+       FROM viewer_rollup
        GROUP BY bucket_start ORDER BY bucket_start`,
     )
     .bind(webinarId)
@@ -821,6 +869,7 @@ export async function getWebinarParticipantStats(
   db: D1Database,
   webinarId: string,
   limit = 200,
+  excludeInternal = false,
 ): Promise<WebinarParticipantStat[]> {
   const { results } = await db
     .prepare(
@@ -837,7 +886,7 @@ export async function getWebinarParticipantStats(
                   ORDER BY datetime(v.joined_at) DESC, v.session_start_at DESC, v.id DESC
                 ) AS recency_rank
          FROM webinar_viewers v
-         WHERE v.webinar_id = ?
+         WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}
        )
        SELECT v.friend_id,
               f.display_name AS friend_name,
@@ -876,6 +925,7 @@ export async function getWebinarAnalyticsSummary(
   db: D1Database,
   webinarId: string,
   completionThresholdSeconds: number,
+  excludeInternal = false,
 ): Promise<WebinarAnalyticsSummaryRow> {
   const row = await db
     .prepare(
@@ -883,17 +933,17 @@ export async function getWebinarAnalyticsSummary(
          SELECT friend_id,
                 MAX(last_position_seconds) AS max_watched_seconds,
                 MAX(CASE WHEN cta_clicked_at IS NOT NULL THEN 1 ELSE 0 END) AS clicked
-         FROM webinar_viewers WHERE webinar_id = ? GROUP BY friend_id
+         FROM webinar_viewers v WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)} GROUP BY v.friend_id
        ), form_submitters AS (
          SELECT DISTINCT fs.friend_id
          FROM form_submissions fs
          JOIN webinar_ctas wc ON wc.form_id = fs.form_id
          JOIN webinars w ON w.id = wc.webinar_id
-         WHERE wc.webinar_id = ? AND fs.created_at >= w.created_at
+         WHERE wc.webinar_id = ? AND fs.created_at >= w.created_at${internalFriendFilter('fs', excludeInternal)}
        )
        SELECT
-         (SELECT COUNT(DISTINCT friend_id) FROM webinar_registrations
-          WHERE webinar_id = ?) AS reservations,
+         (SELECT COUNT(DISTINCT r.friend_id) FROM webinar_registrations r
+          WHERE r.webinar_id = ?${internalFriendFilter('r', excludeInternal)}) AS reservations,
          COUNT(*) AS viewers,
          COALESCE(SUM(CASE WHEN EXISTS (
            SELECT 1 FROM webinar_registrations r
@@ -933,19 +983,20 @@ export async function getWebinarAnalyticsSummary(
 export async function getWebinarDailyStats(
   db: D1Database,
   webinarId: string,
+  excludeInternal = false,
 ): Promise<WebinarDailyStat[]> {
   const { results } = await db
     .prepare(
       `WITH regs AS (
-         SELECT friend_id, created_at FROM webinar_registrations WHERE webinar_id = ?
+         SELECT r.friend_id, r.created_at FROM webinar_registrations r WHERE r.webinar_id = ?${internalFriendFilter('r', excludeInternal)}
        ), views AS (
-         SELECT friend_id, joined_at, cta_clicked_at FROM webinar_viewers WHERE webinar_id = ?
+         SELECT v.friend_id, v.joined_at, v.cta_clicked_at FROM webinar_viewers v WHERE v.webinar_id = ?${internalFriendFilter('v', excludeInternal)}
        ), submissions AS (
          SELECT fs.friend_id, fs.created_at
          FROM form_submissions fs
          JOIN webinar_ctas wc ON wc.form_id = fs.form_id
          JOIN webinars w ON w.id = wc.webinar_id
-         WHERE wc.webinar_id = ? AND fs.created_at >= w.created_at
+         WHERE wc.webinar_id = ? AND fs.created_at >= w.created_at${internalFriendFilter('fs', excludeInternal)}
        ), dates AS (
          SELECT substr(created_at, 1, 10) AS stat_date FROM regs
          UNION SELECT substr(joined_at, 1, 10) FROM views
@@ -1041,6 +1092,7 @@ export interface WebinarRegistration {
   friend_id: string;
   session_start_at: number;
   notified_at: string | null;
+  reminded_day_before_at: string | null;
   created_at: string;
 }
 
@@ -1157,6 +1209,29 @@ export async function getDueWebinarRegistrations(
   return results ?? [];
 }
 
+/** 前日リマインドの粗い未来候補。正確な前日20時の判定はworker側で行う。 */
+export async function getDueDayBeforeWebinarRegistrations(
+  db: D1Database,
+  nowEpochSeconds: number,
+  limit = 100,
+): Promise<Array<WebinarRegistration & { slug: string; title: string; account_id: string | null; duration_seconds: number }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT r.*, w.slug, w.title, w.account_id, w.duration_seconds
+       FROM webinar_registrations r
+       JOIN webinars w ON w.id = r.webinar_id
+       WHERE r.reminded_day_before_at IS NULL
+         AND w.status = 'active'
+         AND r.session_start_at > ?
+         AND r.session_start_at <= ?
+       ORDER BY r.session_start_at ASC
+       LIMIT ?`,
+    )
+    .bind(nowEpochSeconds, nowEpochSeconds + 28 * 60 * 60 + 4 * 60 * 60, limit)
+    .all<WebinarRegistration & { slug: string; title: string; account_id: string | null; duration_seconds: number }>();
+  return results ?? [];
+}
+
 /** 通知済みマーク。未通知の場合のみ更新し、更新できたら true (二重送信ガード) */
 export async function markWebinarRegistrationNotified(
   db: D1Database,
@@ -1165,6 +1240,22 @@ export async function markWebinarRegistrationNotified(
   const res = await db
     .prepare(
       `UPDATE webinar_registrations SET notified_at = ? WHERE id = ? AND notified_at IS NULL`,
+    )
+    .bind(jstNow(), id)
+    .run();
+  return (res.meta.changes ?? 0) > 0;
+}
+
+/** 前日リマインド済みマーク。未通知の場合のみ更新し、更新できたら true。 */
+export async function markWebinarRegistrationDayBeforeReminded(
+  db: D1Database,
+  id: string,
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      `UPDATE webinar_registrations
+          SET reminded_day_before_at = ?
+        WHERE id = ? AND reminded_day_before_at IS NULL`,
     )
     .bind(jstNow(), id)
     .run();

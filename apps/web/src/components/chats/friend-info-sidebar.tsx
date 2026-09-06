@@ -8,6 +8,7 @@ interface FriendDetail {
   displayName: string | null
   pictureUrl: string | null
   isFollowing: boolean
+  isInternal: boolean
   metadata: Record<string, unknown>
   refCode: string | null
   createdAt: string
@@ -68,6 +69,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
   const [friend, setFriend] = useState<FriendDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [savingInternal, setSavingInternal] = useState(false)
   type MileageState =
     | { kind: 'loading' }
     | { kind: 'error' }
@@ -85,7 +87,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
     api.friends.get(friendId).then((res) => {
       if (cancelled) return
       if (res.success && res.data) {
-        setFriend(res.data as unknown as FriendDetail)
+        setFriend({ ...(res.data as unknown as FriendDetail), isInternal: Boolean(res.data.isInternal) })
       } else {
         setError((res as { error?: string }).error ?? '友だち情報を取得できませんでした')
       }
@@ -97,6 +99,24 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
     })
     return () => { cancelled = true }
   }, [friendId])
+
+  const toggleInternal = async () => {
+    if (!friend || savingInternal) return
+    setSavingInternal(true)
+    setError(null)
+    try {
+      const res = await api.friends.update(friend.id, { isInternal: !friend.isInternal })
+      if (res.success && res.data) {
+        setFriend((current) => current ? { ...current, isInternal: Boolean(res.data?.isInternal) } : current)
+      } else {
+        setError((res as { error?: string }).error ?? '内部アカウント設定を更新できませんでした')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSavingInternal(false)
+    }
+  }
 
   useEffect(() => {
     if (!friendId) {
@@ -190,6 +210,27 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
                   </span>
                 )}
               </div>
+            </div>
+
+            {/* Analytics internal account flag — delivery targets are unaffected */}
+            <div className="p-4">
+              <label className="flex items-center justify-between gap-3 text-xs text-gray-700">
+                <span>
+                  <span className="font-medium">内部アカウント</span>
+                  <span className="mt-0.5 block text-[10px] text-gray-400">
+                    {friend.isInternal ? '分析から除外中' : '分析に含める'}
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={friend.isInternal}
+                  onChange={toggleInternal}
+                  disabled={savingInternal}
+                  aria-label="内部アカウント"
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                />
+              </label>
+              <p className="mt-2 text-[10px] text-gray-400">分析の集計だけに反映し、配信対象は変わりません。</p>
             </div>
 
             {/* Harness Mileage — canonical user identity across LINE accounts */}

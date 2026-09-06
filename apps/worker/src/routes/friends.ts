@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import {
   getFriends,
   getFriendById,
+  updateFriendInternalStatus,
   getFriendCount,
   addTagToFriend,
   removeTagFromFriend,
@@ -37,6 +38,7 @@ function serializeFriend(row: DbFriend) {
     pictureUrl: row.picture_url,
     statusMessage: row.status_message,
     isFollowing: Boolean(row.is_following),
+    isInternal: Boolean(row.is_internal),
     metadata: JSON.parse(row.metadata || '{}'),
     refCode: (row as unknown as Record<string, unknown>).ref_code as string | null,
     lineAccountId: ((row as unknown as Record<string, unknown>).line_account_id as string | null) ?? null,
@@ -450,6 +452,26 @@ friends.get('/api/friends/:id', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/friends/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PUT /api/friends/:id - update friend analytics flags
+friends.put('/api/friends/:id', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const body = await c.req.json<{ isInternal?: unknown }>();
+    if (typeof body.isInternal !== 'boolean') {
+      return c.json({ success: false, error: 'isInternal must be a boolean' }, 400);
+    }
+
+    const updated = await updateFriendInternalStatus(c.env.DB, friendId, body.isInternal);
+    if (!updated) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+    return c.json({ success: true, data: serializeFriend(updated) });
+  } catch (err) {
+    console.error('PUT /api/friends/:id error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });
