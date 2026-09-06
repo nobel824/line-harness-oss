@@ -250,13 +250,15 @@ export default function FormEditDialog({ draft, onClose, onSaved }: Props) {
           </div>
 
           <div>
-            <label className="block text-xs text-gray-600 mb-1">説明</label>
+            <label className="block text-xs text-gray-600 mb-1">
+              説明<span className="ml-1 text-red-500">（フォームのタイトル下に表示されます）</span>
+            </label>
             <textarea
               rows={2}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
-              placeholder="管理画面用のメモ(任意)"
+              placeholder="例: かんたん4問・30秒で終わります(任意)"
             />
           </div>
 
