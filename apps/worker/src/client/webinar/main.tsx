@@ -12,7 +12,12 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { buildMeetingDateOptions } from './date-options.js';
 import { FormFieldControl, type FormField } from './form-fields.js';
-import { resolveCtaOpenTracking, resolvePersistentCta } from './persistent-cta.js';
+import {
+  resolveCtaOpenTracking,
+  resolveEndedCta,
+  resolvePersistentCta,
+  type CtaOpenSource,
+} from './persistent-cta.js';
 import { RegistrationCompletionCloseButton } from './registration-completion.js';
 import {
   confirmRegistrationResult,
@@ -69,7 +74,7 @@ interface WebinarCtaCard {
   url: string | null;
 }
 
-type CtaOpenOptions = { persistent?: boolean };
+type CtaOpenOptions = { source?: CtaOpenSource };
 
 interface FormDef {
   id: string;
@@ -622,7 +627,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
 
   const openCta = (card: WebinarCtaCard, opts: CtaOpenOptions = {}) => {
     if (!state?.live) return;
-    const tracking = resolveCtaOpenTracking(opts.persistent === true);
+    const tracking = resolveCtaOpenTracking(opts.source ?? 'card');
     // クリック記録 (fire-and-forget、プレビューでは送らない)
     if (!IS_PREVIEW && tracking.sendCtaClick) {
       void apiPost(`/api/liff/webinars/${encodeURIComponent(slug)}/cta-click`, {
@@ -1008,6 +1013,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
   // 潰れないよう、全体をスマホ幅カラム (max-w-md) に閉じ込めて中央寄せする。
   // スマホでは max-w-md は効かないので挙動不変。
   const persistentCta = resolvePersistentCta(state, activeCta, ctaVisible);
+  const endedCta = resolveEndedCta(state, activeCta);
   return (
     <div className="flex h-dvh justify-center bg-gray-900 text-white">
       <div className="flex h-full w-full max-w-md flex-col">
@@ -1046,9 +1052,20 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
           </button>
         )}
         {ended && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 px-6">
             <p className="text-lg font-bold">配信は終了しました</p>
             <p className="mt-2 text-sm text-gray-300">ご視聴ありがとうございました</p>
+            {endedCta && (
+              <>
+                <button
+                  onClick={() => openCta(endedCta, { source: 'ended' })}
+                  className="mt-5 w-full max-w-xs rounded-full bg-[#06C755] py-3 text-center font-bold text-white active:opacity-80"
+                >
+                  {endedCta.buttonLabel}
+                </button>
+                <p className="mt-2 text-[11px] text-gray-400">この画面のまま開きます</p>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1076,7 +1093,7 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
         <div className="flex items-center gap-1 border-b border-gray-700 px-3 text-xs">
           <button
             type="button"
-            onClick={() => openCta(persistentCta, { persistent: true })}
+            onClick={() => openCta(persistentCta, { source: 'persistent' })}
             className="inline-flex min-h-11 items-center text-gray-300 underline underline-offset-2 active:text-gray-100"
           >
             {persistentCta.buttonLabel}
@@ -1115,12 +1132,15 @@ function WebinarApp({ ctx, slug }: { ctx: WebinarContext; slug: string }) {
       </div>
 
       {activeCta ? (
-        <button
-          onClick={() => openCta(activeCta)}
-          className="mx-3 mb-2 rounded-full bg-[#06C755] py-3 text-center font-bold text-white active:opacity-80"
-        >
-          {activeCta.buttonLabel}
-        </button>
+        <div className="mx-3 mb-2">
+          <button
+            onClick={() => openCta(activeCta)}
+            className="w-full rounded-full bg-[#06C755] py-3 text-center font-bold text-white active:opacity-80"
+          >
+            {activeCta.buttonLabel}
+          </button>
+          <p className="mt-1 text-center text-[11px] text-gray-400">この画面のまま開きます</p>
+        </div>
       ) : ctaVisible && state.cta ? (
         <button
           onClick={clickCta}

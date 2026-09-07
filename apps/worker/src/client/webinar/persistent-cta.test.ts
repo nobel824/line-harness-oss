@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { resolveCtaOpenTracking, resolvePersistentCta } from './persistent-cta.js';
+import { resolveCtaOpenTracking, resolveEndedCta, resolvePersistentCta } from './persistent-cta.js';
 
 type Card = {
   id: string;
@@ -58,18 +58,58 @@ describe('resolvePersistentCta', () => {
   });
 });
 
+describe('resolveEndedCta', () => {
+  test('AC-5: 動画中に出た CTA カードがそのまま終了画面のボタンになる', () => {
+    // activeCta は一度セットされたら ended でもクリアされないため、
+    // resolvePersistentCta と違って activeCta を除外条件にしてはいけない。
+    expect(resolveEndedCta(liveState(), formCard)).toBe(formCard);
+  });
+
+  test('AC-6: CTA が一度も出ないまま終了しても form カードを拾う', () => {
+    expect(resolveEndedCta(liveState(), null)).toBe(formCard);
+  });
+
+  test('form CTA が無いウェビナーでは出さない', () => {
+    expect(resolveEndedCta(liveState([urlCard]), null)).toBeNull();
+    expect(resolveEndedCta(liveState([{ ...formCard, formId: null }]), null)).toBeNull();
+  });
+
+  test('ライブでない state では出さない', () => {
+    expect(resolveEndedCta({ live: false, ctas: [formCard] }, null)).toBeNull();
+    expect(resolveEndedCta(null, null)).toBeNull();
+  });
+
+  test('url カードが activeCta のときはフォームカードへ落とす', () => {
+    expect(resolveEndedCta(liveState([urlCard, formCard]), urlCard)).toBe(formCard);
+  });
+});
+
 describe('resolveCtaOpenTracking', () => {
   test('AC-3: 常時リンクは cta-click を送らず persistent_link を使う', () => {
-    expect(resolveCtaOpenTracking(true)).toEqual({
+    expect(resolveCtaOpenTracking('persistent')).toEqual({
       sendCtaClick: false,
       fieldName: 'persistent_link',
     });
   });
 
   test('AC-4: 通常 CTA は cta-click を送り fieldName を空にする', () => {
-    expect(resolveCtaOpenTracking(false)).toEqual({
+    expect(resolveCtaOpenTracking('card')).toEqual({
       sendCtaClick: true,
       fieldName: '',
     });
+  });
+
+  test('AC-7: 終了画面は cta-click を送らず ended_screen で区別する', () => {
+    // cta_clicks は「配信中に CTA を押した」を表す既存の指標なので増やさない。
+    expect(resolveCtaOpenTracking('ended')).toEqual({
+      sendCtaClick: false,
+      fieldName: 'ended_screen',
+    });
+  });
+
+  test('fieldName はサーバー側バリデーション /^[A-Za-z0-9_]+$/ を通る', () => {
+    for (const source of ['persistent', 'ended'] as const) {
+      expect(resolveCtaOpenTracking(source).fieldName).toMatch(/^[A-Za-z0-9_]+$/);
+    }
   });
 });
