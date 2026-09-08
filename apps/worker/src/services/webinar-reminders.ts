@@ -4,6 +4,9 @@
 // LINE 送信は必ず Harness の /line-api プロキシを通し、messages_log に残す。
 // X-Line-Retry-Key に registration id を使うことで、送信成功後の DB 更新前に
 // worker が落ちても LINE 側で二重送信を防ぎつつ、次 tick で安全に再試行できる。
+// このヘッダは UUID 以外だと LINE が 400 を返す。用途ごとに別キーが要る前日
+// リマインドは、id に接尾辞を足すのではなく deriveRetryKey で UUID を作る
+// (接尾辞版は 3 セッション分の前日リマインドを丸ごと落とした)。
 
 import {
   getDueWebinarRegistrations,
@@ -16,6 +19,7 @@ import {
 } from '@line-crm/db';
 import { addJitter, sleep } from './stealth.js';
 import { pushViaHarnessProxy } from './line-proxy-send.js';
+import { deriveRetryKey } from './retry-key.js';
 import type { HarnessProxyDispatch } from './line-proxy-send.js';
 
 const LEAD_SECONDS = 300;
@@ -164,7 +168,7 @@ export async function processWebinarReminders(
               `開始5分前にも同じリンクをお送りします。\n` +
               `※約57分です。カメラ・マイクは使いません。`,
           },
-        ], `${reg.id}:day_before`, options.proxyDispatch);
+        ], await deriveRetryKey(`${reg.id}:day_before`), options.proxyDispatch);
         // 実送信が成功した後だけ通知済みにする。失敗時は NULL のままなので次 tick で再試行。
         await markWebinarRegistrationDayBeforeReminded(db, reg.id);
         dayBeforeSent++;
@@ -210,7 +214,7 @@ export async function processWebinarReminders(
             `${head}\n\n「${reg.title}」\n${fmtJstDateTime(reg.session_start_at)}〜\n\n` +
             `こちらから参加してください👇\n${buildWebinarUrl(liffId, reg.slug, reg.session_start_at)}`,
         },
-      ], reg.id, options.proxyDispatch);
+      ], await deriveRetryKey(reg.id), options.proxyDispatch);
       // 実送信が成功した後だけ通知済みにする。失敗時は NULL のままなので次 tick で再試行。
       await markWebinarRegistrationNotified(db, reg.id);
       sent++;
