@@ -1,5 +1,8 @@
 import { describe, expect, test, beforeEach, vi } from 'vitest';
 
+// LINE は X-Line-Retry-Key が UUID でないと 400 を返す。
+const RETRY_KEY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 const dbMocks = {
   getDueWebinarRegistrations: vi.fn(),
   getDueDayBeforeWebinarRegistrations: vi.fn(),
@@ -61,10 +64,10 @@ describe('processWebinarReminders', () => {
     expect(proxyFetch).toHaveBeenCalledTimes(1);
     const [url, init] = proxyFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://proxy.example.com/line-api/v2/bot/message/push');
-    expect(init.headers).toMatchObject({
-      Authorization: 'Bearer tok',
-      'X-Line-Retry-Key': 'reg-1',
-    });
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok' });
+    // 値そのものは固定しない。要件は「UUID であること」で、以前ここに id を
+    // そのまま書いていたため、非 UUID が仕様として固定されていた。
+    expect((init.headers as Record<string, string>)['X-Line-Retry-Key']).toMatch(RETRY_KEY_UUID);
     const body = JSON.parse(String(init.body)) as { to: string; messages: Array<{ text: string }> };
     expect(body.to).toBe('U1');
     expect(body.messages[0].text).toContain(
@@ -161,7 +164,8 @@ describe('processWebinarReminders', () => {
       `開始5分前にも同じリンクをお送りします。\n` +
       `※約57分です。カメラ・マイクは使いません。`,
     );
-    expect(init.headers).toMatchObject({ 'X-Line-Retry-Key': 'reg-day-before:day_before' });
+    // 非 UUID を渡すと LINE が 400 を返し、前日リマインドが丸ごと落ちる。
+    expect((init.headers as Record<string, string>)['X-Line-Retry-Key']).toMatch(RETRY_KEY_UUID);
   });
 
   test('同じ tick を2回処理しても前日リマインドは2通送らない', async () => {
@@ -271,7 +275,10 @@ describe('processWebinarReminders', () => {
     const retryKeys = proxyFetch.mock.calls.map(([, init]) => (
       (init as RequestInit).headers as Record<string, string>
     )['X-Line-Retry-Key']);
-    expect(retryKeys).toEqual(['reg-day-before:day_before', 'reg-five-minute']);
+    // このテストの主眼は「前日と5分前で別キーになる」こと。値は固定しない。
+    expect(retryKeys).toHaveLength(2);
+    for (const key of retryKeys) expect(key).toMatch(RETRY_KEY_UUID);
+    expect(retryKeys[0]).not.toBe(retryKeys[1]);
     expect(dbMocks.markWebinarRegistrationNotified).toHaveBeenCalledWith(
       expect.anything(), fiveMinuteReg.id,
     );

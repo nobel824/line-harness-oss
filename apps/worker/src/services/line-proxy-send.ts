@@ -19,7 +19,14 @@ export async function pushViaHarnessProxy(
     Authorization: `Bearer ${accessToken}`,
     'Content-Type': 'application/json',
   };
-  if (retryKey) headers['X-Line-Retry-Key'] = retryKey;
+  // UUID 以外を渡すと LINE が 400 を返し、呼び出し側からは「送れない」としか
+  // 見えない。呼び出し側の取り違えをここで言い切る (deriveRetryKey を使うこと)。
+  if (retryKey) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(retryKey)) {
+      throw new Error(`X-Line-Retry-Key must be a UUID: ${retryKey}`);
+    }
+    headers['X-Line-Retry-Key'] = retryKey;
+  }
 
   const url = `${proxyBaseUrl.replace(/\/$/, '')}/line-api/v2/bot/message/push`;
   const init: RequestInit = {
