@@ -368,6 +368,7 @@ describe('buildJourneyFollowupText', () => {
         admissionUrl,
         pickerUrl,
         consultationUrl,
+        hasBooking: false,
       },
     );
     expect(text).toBe(
@@ -381,6 +382,46 @@ describe('buildJourneyFollowupText', () => {
     expect(text).not.toContain(pickerUrl);
   });
 
+  test('完走していても相談を予約済みなら、申し込みの案内は送らない', () => {
+    const common = {
+      lastPositionSeconds: 2997,
+      formCtaAtSeconds: 2997,
+      durationSeconds: 3420,
+      sessionStartAt: ARCHIVE_SESSION_START,
+      formId: 'form-1',
+      admissionUrl: 'https://example.com/admission',
+      pickerUrl,
+      consultationUrl: 'https://liff.line.me/123/?page=form&id=form-1&liffId=123',
+    };
+    // 本CTAを押さずに常時リンクから予約した人は cta_clicked_at が付かないので、
+    // 候補SQLのCTAクリック除外を素通りしてここまで来る。
+    expect(
+      buildJourneyFollowupText('archive_closing', 'AI導入ライブ', pickerUrl, null, {
+        ...common, hasBooking: true,
+      }),
+    ).toBeNull();
+    expect(
+      buildJourneyFollowupText('archive_closing', 'AI導入ライブ', pickerUrl, null, {
+        ...common, hasBooking: false,
+      }),
+    ).toContain('無料相談は、こちらから申し込めます');
+  });
+
+  test('予約済みでも、まだ見終わっていなければアーカイブ期限は伝える', () => {
+    const text = buildJourneyFollowupText('archive_closing', 'AI導入ライブ', pickerUrl, null, {
+      lastPositionSeconds: 1800,
+      formCtaAtSeconds: 2997,
+      durationSeconds: 3420,
+      sessionStartAt: ARCHIVE_SESSION_START,
+      formId: 'form-1',
+      admissionUrl: 'https://example.com/admission',
+      pickerUrl,
+      consultationUrl: 'https://example.com/consultation',
+      hasBooking: true,
+    });
+    expect(text).toContain('続きが見られるのは');
+  });
+
   test('AC-11-1〜3: 3分岐の本文に禁止された緊急性表現を含めない', () => {
     const common = {
       formCtaAtSeconds: 2997,
@@ -390,6 +431,7 @@ describe('buildJourneyFollowupText', () => {
       admissionUrl: 'https://example.com/admission',
       pickerUrl,
       consultationUrl: 'https://example.com/consultation',
+      hasBooking: false,
     };
     const texts = [
       buildJourneyFollowupText('archive_closing', 'AI導入ライブ', pickerUrl, null, {
@@ -882,8 +924,8 @@ describe('processWebinarFollowups', () => {
     expect(result).toMatchObject({ sent: 0, failed: 0 });
     expect(proxyMocks.pushViaHarnessProxy).not.toHaveBeenCalled();
     expect(updates).toContainEqual(expect.objectContaining({
-      sql: expect.stringContaining("last_error = 'watched_to_end'"),
-      values: ['2026-08-10T20:00:00+09:00', 'journey-1'],
+      sql: expect.stringContaining("status = 'skipped', last_error = ?"),
+      values: ['watched_to_end', '2026-08-10T20:00:00+09:00', 'journey-1'],
     }));
   });
 

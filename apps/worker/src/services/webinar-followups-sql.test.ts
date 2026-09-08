@@ -742,6 +742,51 @@ describe('webinar follow-up candidate SQL', () => {
     }
   });
 
+  test('T10-b: 完走者でも相談を予約済みなら archive_closing を送らない', async () => {
+    // 本CTAを押さずに常時リンクから予約すると cta_clicked_at が付かないので、
+    // 候補SQLのCTAクリック除外を素通りする。予約済みの相手に申し込みを
+    // 催促していた（本番で1件発生）。
+    const cases = [
+      { status: 'confirmed', expectedSent: 0 },
+      { status: 'completed', expectedSent: 0 },
+      { status: 'cancelled', expectedSent: 1 },
+    ] as const;
+    for (const scenario of cases) {
+      vi.clearAllMocks();
+      prepareDeliveryMocks();
+      const scenarioDb = createSqlite();
+      insertRegistration(scenarioDb, '2026-08-08T23:00:00+09:00');
+      insertViewer(scenarioDb, {
+        sessionStartAt: epoch('2026-08-08T23:00:00+09:00'),
+        lastPositionSeconds: 2997,
+      });
+      insertJourneyFollowup(
+        scenarioDb,
+        'registered_no_show',
+        'sent',
+        '2026-08-09T00:00:00+09:00',
+        `journey-registered-no-show-sent-${scenario.status}`,
+      );
+      scenarioDb.prepare(
+        `INSERT INTO bookings (id, friend_id, menu_id, status, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(
+        `booking-archive-${scenario.status}`,
+        FRIEND_ID,
+        'menu-1',
+        scenario.status,
+        '2026-08-08T23:10:00+09:00',
+      );
+      try {
+        const result = await processOn(scenarioDb);
+        expect(result, scenario.status).toMatchObject({ sent: scenario.expectedSent, failed: 0 });
+        expect(proxyMocks.pushViaHarnessProxy).toHaveBeenCalledTimes(scenario.expectedSent);
+      } finally {
+        scenarioDb.close();
+      }
+    }
+  });
+
   test('T11: submitted_no_booking_24h は送信予定時刻から24時間を過ぎると候補にしない', async () => {
     const overdueDb = createSqlite();
     updateConfig(overdueDb, { booking_delay_minutes: 9999 });
