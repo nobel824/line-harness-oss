@@ -12,6 +12,7 @@ import {
 } from './meet-consultation-reminders.js';
 import type { HarnessProxyDispatch } from './line-proxy-send.js';
 import { pushViaHarnessProxy } from './line-proxy-send.js';
+import { deriveRetryKey } from './retry-key.js';
 
 const JST_OFFSET_MS = 9 * 60 * 60_000;
 const MIN_LEAD_TIME_MINUTES = 60;
@@ -486,7 +487,7 @@ export async function bookWebinarConsultation(
             recipient.display_name,
           ),
         }],
-        `${bookingId}:admin`,
+        await deriveRetryKey(`${bookingId}:admin`),
         input.proxyDispatch,
       );
     }
