@@ -63,6 +63,7 @@ type JourneyCandidate = {
   form_cta_at_seconds?: number | null;
   form_id?: string | null;
   session_start_at?: number | null;
+  has_booking?: number | null;
 };
 
 export type RegisteredNoShowWatch = {
@@ -78,6 +79,7 @@ export type ArchiveClosingWatch = RegisteredNoShowWatch & {
   admissionUrl: string;
   pickerUrl: string;
   consultationUrl: string | null;
+  hasBooking: boolean;
 };
 
 type JourneyFollowupRow = {
@@ -163,7 +165,7 @@ function isArchiveClosingWatch(
   return 'sessionStartAt' in watch;
 }
 
-function buildArchiveClosingText(title: string, watch: ArchiveClosingWatch): string {
+function buildArchiveClosingText(title: string, watch: ArchiveClosingWatch): string | null {
   const lastPosition = watch.lastPositionSeconds;
   const ctaAt = watch.formCtaAtSeconds;
   const deadline = formatJstTime(
@@ -197,6 +199,12 @@ function buildArchiveClosingText(title: string, watch: ArchiveClosingWatch): str
       remainingWatchLine(watch.durationSeconds, lastPosition)
     );
   }
+
+  // ここから先は「完走したので相談に申し込んでください」。既に予約が入っている人に
+  // 送ると、予約済みの相手へ申し込みを催促することになる（本番で1件発生）。
+  // 本CTAを押さずに常時リンクから予約した人は cta_clicked_at が付かないので、
+  // 候補SQLの CTA クリック除外だけでは素通りする。
+  if (watch.hasBooking) return null;
 
   return (
     `「${title}」を最後までご覧いただき、ありがとうございました。\n\n` +
@@ -501,7 +509,20 @@ export async function journeyCandidates(
                 SELECT wc.form_id FROM webinar_ctas wc
                 WHERE wc.webinar_id = w.id AND wc.kind = 'form'
                 ORDER BY wc.at_seconds ASC LIMIT 1
-              ) AS form_id
+              ) AS form_id,
+              (
+                EXISTS (
+                  SELECT 1 FROM bookings b
+                  WHERE b.friend_id = lr.friend_id
+                    AND b.menu_id = cfg.booking_menu_id
+                    AND b.status IN ('requested', 'confirmed', 'completed')
+                )
+                OR EXISTS (
+                  SELECT 1 FROM meet_consultations mc
+                  WHERE mc.friend_id = lr.friend_id
+                    AND mc.status IN ('confirmed', 'completed')
+                )
+              ) AS has_booking
        FROM latest_registrations lr
        JOIN webinars w ON w.id = lr.webinar_id
        JOIN webinar_followup_configs cfg
@@ -811,6 +832,7 @@ export async function processWebinarFollowups(
                 ),
                 pickerUrl,
                 consultationUrl: formId ? formUrl(delivery.liffId, formId) : null,
+                hasBooking: (candidate.has_booking ?? 0) === 1,
               };
             })()
           : undefined;
@@ -822,10 +844,14 @@ export async function processWebinarFollowups(
         watch,
       );
       if (text === null) {
+        // 完走者を弾いたのか、予約済みを弾いたのかは段別の診断で区別できる必要がある。
+        const skipReason = watch && isArchiveClosingWatch(watch) && watch.hasBooking
+          ? 'already_booked'
+          : 'watched_to_end';
         await db.prepare(
           `UPDATE webinar_journey_followups
-           SET status = 'skipped', last_error = 'watched_to_end', updated_at = ? WHERE id = ?`,
-        ).bind(jstNow(), followup.id).run();
+           SET status = 'skipped', last_error = ?, updated_at = ? WHERE id = ?`,
+        ).bind(skipReason, jstNow(), followup.id).run();
         continue;
       }
       await pushViaHarnessProxy(
