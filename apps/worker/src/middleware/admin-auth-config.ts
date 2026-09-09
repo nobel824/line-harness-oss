@@ -18,6 +18,7 @@ import type { Env } from '../index.js';
 // ---------------------------------------------------------------------------
 
 export type AdminSameSite = 'Strict' | 'Lax' | 'None';
+export type AdminBrowserAuthMode = 'api_key' | 'hybrid' | 'access';
 
 export interface AdminAuthConfig {
   /** Origins permitted to make credentialed cross-origin requests. */
@@ -43,7 +44,19 @@ export type AdminAuthEnv = {
   ADMIN_ORIGIN?: string;
   ADMIN_COOKIE_SAMESITE?: string;
   ADMIN_ALLOW_CROSS_SITE?: string;
+  ADMIN_BROWSER_AUTH_MODE?: string;
+  ADMIN_ACCESS_TEAM_DOMAIN?: string;
+  ADMIN_ACCESS_AUD?: string;
 };
+
+export interface AdminBrowserAuthConfig {
+  mode: AdminBrowserAuthMode;
+  accessTeamDomain: string | null;
+  accessAudience: string | null;
+  accessLoginUrl: string | null;
+  /** Only an access-only deployment is unavailable when Access is incomplete. */
+  misconfigured: string | null;
+}
 
 /**
  * Public-suffix-style multi-tenant hosts where every subdomain is its own
@@ -82,6 +95,60 @@ export function normalizeOrigin(value: string | undefined | null): string | null
   } catch {
     return null;
   }
+}
+
+/** Cloudflare Access issuers are an exact team-origin, never an arbitrary URL. */
+export function normalizeAccessTeamDomain(value: string | undefined | null): string | null {
+  if (!value) return null;
+  const raw = value.trim();
+  try {
+    const url = new URL(raw);
+    if (
+      raw !== url.origin ||
+      url.protocol !== 'https:' ||
+      url.port ||
+      !/^[a-z0-9-]+\.cloudflareaccess\.com$/iu.test(url.hostname)
+    ) {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function browserAuthMode(value: string | undefined): AdminBrowserAuthMode {
+  switch (value?.trim().toLowerCase()) {
+    case 'hybrid': return 'hybrid';
+    case 'access': return 'access';
+    case 'api_key': return 'api_key';
+    default: return 'api_key';
+  }
+}
+
+/** Resolve the non-secret browser-login policy exposed by /api/auth/config. */
+export function resolveAdminBrowserAuthConfig(
+  env: AdminAuthEnv,
+  opts: { requestOrigin?: string } = {},
+): AdminBrowserAuthConfig {
+  const mode = browserAuthMode(env.ADMIN_BROWSER_AUTH_MODE);
+  const accessTeamDomain = normalizeAccessTeamDomain(env.ADMIN_ACCESS_TEAM_DOMAIN);
+  const accessAudience = env.ADMIN_ACCESS_AUD?.trim() || null;
+  const workerOrigin = normalizeOrigin(env.WORKER_URL) ?? normalizeOrigin(opts.requestOrigin);
+  const accessLoginUrl = accessTeamDomain && accessAudience && workerOrigin
+    ? new URL('/admin/access', workerOrigin).toString()
+    : null;
+  const missing = !accessTeamDomain || !accessAudience;
+
+  return {
+    mode,
+    accessTeamDomain,
+    accessAudience,
+    accessLoginUrl,
+    misconfigured: mode === 'access' && missing
+      ? 'Cloudflare Access browser login requires valid ADMIN_ACCESS_TEAM_DOMAIN and ADMIN_ACCESS_AUD settings.'
+      : null,
+  };
 }
 
 /**

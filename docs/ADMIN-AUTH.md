@@ -38,6 +38,52 @@ SDK and MCP callers continue to send `Authorization: Bearer <key>`. They are not
 cookie-driven, so CSRF enforcement does not apply to them, and CORS does not
 affect non-browser (no `Origin`) callers.
 
+## Cloudflare Access email login — optional
+
+Cloudflare Access can verify an administrator with its email OTP flow, so the
+browser never has to receive or type an API key. Access establishes identity
+only: the Worker verifies the `Cf-Access-Jwt-Assertion` itself, then resolves
+the normalized email (`trim + lowercase`) against active `staff_members`.
+The matched staff row is the only authorization source; Access policies never
+grant a Harness role. A missing, inactive, unknown, or duplicate email is
+rejected without creating a cookie session.
+
+Set the following Worker variables after creating an Access application whose
+origin is the Worker route (`https://<worker-domain>/admin/access`):
+
+| Variable | Purpose |
+|----------|---------|
+| `ADMIN_BROWSER_AUTH_MODE` | `api_key` (default), `hybrid`, or `access`. Invalid/unset values use `api_key`. |
+| `ADMIN_ACCESS_TEAM_DOMAIN` | Exact Access team origin: `https://<team>.cloudflareaccess.com`. |
+| `ADMIN_ACCESS_AUD` | The Access application's audience (AUD) value. |
+
+The Worker accepts only RS256 assertions with the configured issuer and
+audience and verifies their signature, expiration and not-before claims against
+Cloudflare's Access JWKS. It never writes the assertion or an OTP to logs.
+
+`hybrid` shows both the email button and the existing API-key form; use it to
+verify the rollout. `access` shows only the email button and rejects
+`POST /api/auth/login` with `403`. If `access` is selected but the team domain
+or audience is absent/invalid, `/api/auth/config` and `/admin/access` return
+`503`; no API-key fallback is enabled. `api_key` retains the existing browser
+flow. SDK, MCP, and CLI Bearer API-key authentication is unchanged in every
+mode.
+
+### Access rollout and rollback
+
+1. Deploy with the default `ADMIN_BROWSER_AUTH_MODE=api_key`.
+2. Configure a same-site custom admin/API domain where possible, then set up a
+   Cloudflare Access application with Email OTP and callback/origin
+   `https://<worker-domain>/admin/access`.
+3. Set `ADMIN_ACCESS_TEAM_DOMAIN` and `ADMIN_ACCESS_AUD`, and ensure each
+   permitted operator has one active `staff_members` record with their email.
+4. Switch to `hybrid`, complete an OTP login, and confirm the resulting role is
+   the role from `staff_members`.
+5. Switch explicitly to `access` to remove browser API-key entry.
+6. If Access is unavailable, explicitly return to `hybrid` or `api_key`.
+   Do not remove Access variables while retaining `access` mode: it is designed
+   to fail closed.
+
 ## Topology & configuration
 
 Cookies only reach the API if `SameSite` matches the topology. The Worker reads

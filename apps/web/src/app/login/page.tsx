@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getApiBase } from '@/lib/api-base'
 
@@ -7,7 +7,40 @@ export default function LoginPage() {
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [authMode, setAuthMode] = useState<'loading' | 'api_key' | 'hybrid' | 'access'>('loading')
+  const [accessLoginUrl, setAccessLoginUrl] = useState<string | null>(null)
   const router = useRouter()
+
+  useEffect(() => {
+    const loadConfig = async () => {
+      const apiUrl = getApiBase()
+      if (!apiUrl) {
+        setError('NEXT_PUBLIC_API_URL is not set in build env')
+        return
+      }
+      try {
+        const res = await fetch(`${apiUrl}/api/auth/config`, { credentials: 'include' })
+        const config = await res.json() as {
+          mode?: 'api_key' | 'hybrid' | 'access'
+          accessLoginUrl?: string | null
+          error?: string
+        }
+        if (!res.ok || !config.mode) {
+          setError(config.error ?? 'ログイン設定を読み込めませんでした')
+          return
+        }
+        setAuthMode(config.mode)
+        setAccessLoginUrl(config.accessLoginUrl ?? null)
+      } catch {
+        setError('ログイン設定の取得に失敗しました')
+      }
+    }
+    void loadConfig()
+  }, [])
+
+  const startAccessLogin = () => {
+    if (accessLoginUrl) window.location.assign(accessLoginUrl)
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -77,7 +110,31 @@ export default function LoginPage() {
           <p className="text-sm text-gray-500 mt-1">管理画面にログイン</p>
         </div>
 
-        <form onSubmit={handleLogin}>
+        {authMode === 'loading' && !error && (
+          <p className="text-sm text-gray-500 text-center">ログイン設定を読み込み中...</p>
+        )}
+
+        {(authMode === 'access' || authMode === 'hybrid') && accessLoginUrl && (
+          <button
+            type="button"
+            onClick={startAccessLogin}
+            className="w-full py-3 text-white font-medium rounded-lg transition-opacity hover:opacity-90"
+            style={{ backgroundColor: '#06C755' }}
+          >
+            メールで認証してログイン
+          </button>
+        )}
+
+        {authMode === 'hybrid' && accessLoginUrl && (
+          <div className="flex items-center gap-3 my-5 text-xs text-gray-400">
+            <span className="h-px flex-1 bg-gray-200" />
+            または APIキーでログイン
+            <span className="h-px flex-1 bg-gray-200" />
+          </div>
+        )}
+
+        {(authMode === 'api_key' || authMode === 'hybrid') && (
+        <form onSubmit={handleLogin} className={authMode === 'hybrid' && !accessLoginUrl ? 'mt-5' : ''}>
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
             <input
@@ -103,6 +160,11 @@ export default function LoginPage() {
             {loading ? 'ログイン中...' : 'ログイン'}
           </button>
         </form>
+        )}
+
+        {error && authMode !== 'api_key' && authMode !== 'hybrid' && (
+          <p className="text-sm text-red-600 mt-4">{error}</p>
+        )}
       </div>
     </div>
   )
