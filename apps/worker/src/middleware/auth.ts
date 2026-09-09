@@ -184,6 +184,7 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     // Admin login/logout — issue/clear the session cookie before auth exists.
     path === '/api/auth/login' ||
     path === '/api/auth/logout' ||
+    path === '/api/auth/config' ||
     path.startsWith('/auth/') ||
     path === '/setup' ||
     path === '/api/integrations/stripe/webhook' ||

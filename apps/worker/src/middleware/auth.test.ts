@@ -35,8 +35,8 @@ function env(overrides: Partial<Env['Bindings']> = {}): Env['Bindings'] {
 }
 
 // Cross-site production topology with explicit opt-in (the supported case).
-function crossSiteEnv(): Env['Bindings'] {
-  return env({ ADMIN_ORIGIN: PAGES, ADMIN_ALLOW_CROSS_SITE: 'true' });
+function crossSiteEnv(overrides: Partial<Env['Bindings']> = {}): Env['Bindings'] {
+  return env({ ADMIN_ORIGIN: PAGES, ADMIN_ALLOW_CROSS_SITE: 'true', ...overrides });
 }
 
 function app() {
@@ -116,6 +116,42 @@ describe('admin login cookie attributes', () => {
     }, crossSiteEnv());
     expect(res.status).toBe(401);
     expect(cookieFor(res, 'lh_admin_session')).toBeUndefined();
+  });
+});
+
+describe('browser authentication modes', () => {
+  test('public config defaults to api_key and does not disclose Access settings', async () => {
+    const res = await app().request('/api/auth/config', {}, env());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ mode: 'api_key', accessLoginUrl: null });
+  });
+
+  test('hybrid config exposes only a usable Access entry URL', async () => {
+    const res = await app().request('/api/auth/config', {}, env({
+      ADMIN_BROWSER_AUTH_MODE: 'hybrid',
+      ADMIN_ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com',
+      ADMIN_ACCESS_AUD: 'secret-to-Access-but-not-the-browser-config',
+    }));
+    expect(await res.json()).toEqual({
+      mode: 'hybrid', accessLoginUrl: 'https://your-worker.your-subdomain.workers.dev/admin/access',
+    });
+  });
+
+  test('access-only mode rejects the API-key session exchange', async () => {
+    const res = await app().request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ apiKey: 'staff-key' }),
+      headers: { 'Content-Type': 'application/json' },
+    }, crossSiteEnv({ ADMIN_BROWSER_AUTH_MODE: 'access' }));
+    expect(res.status).toBe(403);
+    expect(cookieFor(res, 'lh_admin_session')).toBeUndefined();
+  });
+
+  test('access-only mode without Access settings exposes a 503 configuration error', async () => {
+    const res = await app().request('/api/auth/config', {}, crossSiteEnv({
+      ADMIN_BROWSER_AUTH_MODE: 'access',
+    }));
+    expect(res.status).toBe(503);
   });
 });
 
