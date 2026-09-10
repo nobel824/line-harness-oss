@@ -26,6 +26,8 @@
     "deploy:setup": "node packages/create-line-harness/dist/index.js",
     "deploy:update": "node packages/create-line-harness/dist/index.js update",
     "sandbox:create-line-harness": "bash scripts/run-create-line-harness-sandbox.sh",
+    "verify:readiness": "node scripts/verify-readiness.mjs",
+    "verify:local": "node scripts/verify-local.mjs",
     "test:scripts": "vitest run --config vitest.config.ts",
     "build:bundle": "tsx scripts/release/build-bundle.ts",
     "build:wfp-bundle": "tsx scripts/release/build-wfp-bundle.ts"

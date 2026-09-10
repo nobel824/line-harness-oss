@@ -83,6 +83,29 @@ CLI が以下を全部やる:
 - LINE 公式アカウント + Messaging API channel
 - Node.js 22+ / pnpm
 
+### リポジトリを開発する
+
+```bash
+corepack enable
+pnpm install --frozen-lockfile
+pnpm verify:readiness
+```
+
+`verify:readiness`は、依存取得後にsecretや外部ネットワークを使わず、Codex利用準備に関係するbuildとtestを実行します。`verify:local`は全workspaceのtypecheckとunit testを最後まで実行し、既存の失敗も含めてrepository全体の状態を正直に返す完全gateです。個別に確認する場合は次を使います。
+
+```bash
+pnpm --filter worker typecheck
+pnpm --filter worker test
+pnpm --filter web test
+pnpm build
+```
+
+実値を設定する前に[環境・外部依存の契約](docs/environment-contract.md)と空欄の[`.env.example`](.env.example)を確認してください。秘密値はリポジトリへ保存しません。NO WAVE環境ではKeychain IDやbindingをここへ複製せず、`nowave-ops`のregistryとdoctorを正本として確認します。未登録・曖昧なbindingは、推測で「利用可能」にしません。
+
+`NEXT_PUBLIC_ADMIN_API_KEY`は設定しないでください。空文字を含め、この変数名が定義されているとWeb buildと`verify:readiness`は値を表示せず停止します。`NEXT_PUBLIC_*`はbrowser bundleへ公開されるため、Workerの`/admin/update/start`を安全に認証できません。現行のbrowser自己更新UIはコードで固定offです。環境変数だけでは再有効化できません。Cloudflare Access等のserver-side認証を更新routeへ実装・検証し、コードと挙動testを変更するまでは、自己更新をローカルの`create-line-harness update`に限定します。
+
+Cloudflareへのdeploy、D1のremote migration、LINE送信、MCPの書き込み操作、Google Calendar/Meet・Stripe・LINE Developersの本番設定変更は、実行前にユーザー承認が必要です。
+
 ---
 
 ## 主要機能
@@ -159,7 +182,7 @@ CLI が以下を全部やる:
   - `@line-harness/sdk` — TypeScript SDK
   - `@line-harness/mcp-server` — Claude Code 用 MCP server
   - `create-line-harness` — セットアップ CLI
-  - `@line-harness/plugin-template` — プラグイン拡張用テンプレート
+  - [`@line-harness/plugin-template`](packages/plugin-template/README.md) — プラグイン拡張用テンプレート。`EXTERNAL_API_KEY`は必須secret、`LINE_ACCOUNT_ID`は任意
   - `@line-harness/db` — D1 マイグレーション + ヘルパー
   - `@line-harness/line-sdk` — LINE API 薄ラッパー
   - `@line-harness/shared` — 型定義共有
