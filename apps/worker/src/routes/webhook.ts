@@ -434,6 +434,7 @@ export async function handleEvent(
     // silent + automation で「返信なしでタグだけ付ける」構成もここで成立する。
     const { matched: postbackMatched, replyTokenConsumed: postbackReplyTokenConsumed } =
       await matchAndReply(db, lineClient, friend, postbackData, event.replyToken, {
+        inputKind: 'postback',
         lineAccountId,
         workerUrl,
         liffUrl,
@@ -635,6 +636,7 @@ export async function handleEvent(
       incomingText,
       event.replyToken,
       {
+        inputKind: 'text',
         lineAccountId,
         workerUrl,
         liffUrl,
