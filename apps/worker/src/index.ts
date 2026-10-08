@@ -31,6 +31,7 @@ import { usage } from './routes/usage.js';
 import { inbox } from './routes/inbox.js';
 import { openapi } from './routes/openapi.js';
 import { liffRoutes } from './routes/liff.js';
+import { isSagarifujiThreadsRef, SAGARIFUJI_LINE_CHANNEL_ID, SAGARIFUJI_THREADS_REF } from './lib/reserved-refs.js';
 import { affiliateSelfRoutes } from './routes/affiliate-self.js';
 // Round 3 ルート
 import { webhooks } from './routes/webhooks.js';
@@ -74,6 +75,7 @@ import { instagramEngagement } from './routes/instagram-engagement.js';
 import adminVersion from './routes/admin-version.js';
 import adminUpdate from './routes/admin-update.js';
 import { adminSso } from './routes/admin-sso.js';
+import { adminAccess } from './routes/admin-access.js';
 import { mediaInquiries } from './routes/media-inquiries.js';
 import { isLinkPreviewBot } from './lib/og-bot.js';
 import { buildOgHtml } from './lib/og-html.js';
@@ -102,6 +104,10 @@ export type Env = {
     ADMIN_ORIGIN?: string;          // Comma-separated admin web origin allowlist for credentialed CORS
     ADMIN_COOKIE_SAMESITE?: string; // Optional override: 'Strict' | 'Lax' | 'None'
     ADMIN_ALLOW_CROSS_SITE?: string; // 'true' opts into SameSite=None cross-site cookies
+    // Browser login policy. API-key Bearer auth for SDK/MCP/CLI is unaffected.
+    ADMIN_BROWSER_AUTH_MODE?: string; // 'api_key' (default) | 'hybrid' | 'access'
+    ADMIN_ACCESS_TEAM_DOMAIN?: string; // https://<team>.cloudflareaccess.com
+    ADMIN_ACCESS_AUD?: string; // Cloudflare Access application audience
     // External SSO into the admin session (GET /admin/sso). Optional: when the
     // secret is unset the route answers like any unregistered path, so the
     // feature is entirely absent unless an operator opts in. ≥32 chars, shared
@@ -262,6 +268,9 @@ app.route('/admin/update', adminUpdate);
 // Inert (404) unless ADMIN_SSO_SECRET is configured. authMiddleware skips
 // non-/api/ paths, so this route owns its own verification.
 app.route('/', adminSso);
+// Cloudflare Access email OTP entrypoint. It owns JWT verification and is
+// intentionally outside /api, so the Access application can protect it.
+app.route('/', adminAccess);
 
 // Self-hosted QR code proxy — prevents leaking ref tokens to third-party services
 app.get('/api/qr', async (c) => {
@@ -303,9 +312,16 @@ app.get('/r/:ref', async (c) => {
   // working; only the account choice is fixed. Unknown channel_id or an
   // account without liff_id falls through to the normal resolution chain.
   const accountParam = c.req.query('account') || '';
+  const sagaRef = isSagarifujiThreadsRef(ref);
+  if (sagaRef && (ref !== SAGARIFUJI_THREADS_REF || accountParam !== SAGARIFUJI_LINE_CHANNEL_ID)) {
+    return c.text('このリンクは現在利用できません。', 400);
+  }
   let accountResolved = false;
   if (accountParam) {
     const account = await getLineAccountByChannelId(c.env.DB, accountParam);
+    if (sagaRef && (account?.channel_id !== SAGARIFUJI_LINE_CHANNEL_ID || !account.liff_id)) {
+      return c.text('このリンクは現在利用できません。', 503);
+    }
     if (account?.liff_id) {
       liffUrl = `https://liff.line.me/${account.liff_id}`;
       accountResolved = true;

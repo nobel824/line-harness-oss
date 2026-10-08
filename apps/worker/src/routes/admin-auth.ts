@@ -9,9 +9,32 @@ import {
   csrfTokenFromCookie,
   expiredCookie,
 } from '../middleware/auth.js';
-import { resolveAdminAuthConfig } from '../middleware/admin-auth-config.js';
+import {
+  resolveAdminAuthConfig,
+  resolveAdminBrowserAuthConfig,
+} from '../middleware/admin-auth-config.js';
 
 export const adminAuth = new Hono<Env>();
+
+/**
+ * GET /api/auth/config — public browser-login policy only. The team domain,
+ * audience and other deployment details remain server-side.
+ */
+adminAuth.get('/api/auth/config', (c) => {
+  const config = resolveAdminBrowserAuthConfig(c.env, {
+    requestOrigin: new URL(c.req.url).origin,
+  });
+  if (config.misconfigured) {
+    console.error(`[admin-auth] refused access-only login — ${config.misconfigured}`);
+    return c.json({ success: false, error: config.misconfigured }, 503);
+  }
+  return c.json({
+    mode: config.mode,
+    // In hybrid mode this is null until Access is configured; API-key login
+    // remains usable, while the UI does not render a broken Access button.
+    accessLoginUrl: config.accessLoginUrl,
+  });
+});
 
 /**
  * POST /api/auth/login
@@ -27,6 +50,15 @@ export const adminAuth = new Hono<Env>();
  * configuration error.
  */
 adminAuth.post('/api/auth/login', async (c) => {
+  const browserAuth = resolveAdminBrowserAuthConfig(c.env, {
+    requestOrigin: new URL(c.req.url).origin,
+  });
+  if (browserAuth.mode === 'access') {
+    // Fail closed: a configuration error must never silently restore the
+    // API-key browser path in an access-only deployment.
+    return c.json({ success: false, error: 'API key browser login is disabled.' }, 403);
+  }
+
   const config = resolveAdminAuthConfig(c.env, { requestOrigin: new URL(c.req.url).origin });
   if (config.misconfigured) {
     console.error('[admin-auth] refused login — misconfigured topology:', config.misconfigured);

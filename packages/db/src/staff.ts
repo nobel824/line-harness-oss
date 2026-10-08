@@ -24,6 +24,18 @@ export interface UpdateStaffInput {
   is_active?: number;
 }
 
+export type ActiveStaffByEmailResult =
+  | { kind: 'not_found' }
+  | { kind: 'found'; staff: StaffMember }
+  | { kind: 'duplicate' };
+
+/** Canonical form used for both staff writes and Cloudflare Access lookups. */
+export function normalizeStaffEmail(email: string | null | undefined): string | null {
+  if (email == null) return null;
+  const normalized = email.trim().toLowerCase();
+  return normalized || null;
+}
+
 function generateApiKey(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -58,6 +70,33 @@ export async function getStaffById(
     .first<StaffMember>();
 }
 
+/**
+ * Resolve an active staff member by email without assuming a database-level
+ * uniqueness constraint. Existing installations can contain duplicate email
+ * values, which must fail closed for browser authentication.
+ */
+export async function getActiveStaffByEmail(
+  db: D1Database,
+  email: string,
+): Promise<ActiveStaffByEmailResult> {
+  const normalized = normalizeStaffEmail(email);
+  if (!normalized) return { kind: 'not_found' };
+
+  const result = await db
+    .prepare(
+      `SELECT * FROM staff_members
+       WHERE is_active = 1 AND LOWER(TRIM(email)) = ?
+       ORDER BY created_at ASC
+       LIMIT 2`,
+    )
+    .bind(normalized)
+    .all<StaffMember>();
+
+  if (result.results.length === 0) return { kind: 'not_found' };
+  if (result.results.length > 1) return { kind: 'duplicate' };
+  return { kind: 'found', staff: result.results[0]! };
+}
+
 export async function createStaffMember(
   db: D1Database,
   input: CreateStaffInput,
@@ -71,7 +110,7 @@ export async function createStaffMember(
       `INSERT INTO staff_members (id, name, email, role, api_key, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
     )
-    .bind(id, input.name, input.email ?? null, input.role, apiKey, now, now)
+    .bind(id, input.name, normalizeStaffEmail(input.email), input.role, apiKey, now, now)
     .run();
 
   return (await db
@@ -90,7 +129,7 @@ export async function updateStaffMember(
   const values: (string | number | null)[] = [now];
 
   if (input.name !== undefined) { sets.push('name = ?'); values.push(input.name); }
-  if (input.email !== undefined) { sets.push('email = ?'); values.push(input.email ?? null); }
+  if (input.email !== undefined) { sets.push('email = ?'); values.push(normalizeStaffEmail(input.email)); }
   if (input.role !== undefined) { sets.push('role = ?'); values.push(input.role); }
   if (input.is_active !== undefined) { sets.push('is_active = ?'); values.push(input.is_active); }
 

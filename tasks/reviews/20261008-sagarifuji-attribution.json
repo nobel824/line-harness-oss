@@ -1,0 +1,109 @@
+{
+  "review_input_binding": {
+    "head": "0adf9c6ec0dba1de146b0608f8d6027da048debd",
+    "source": {
+      "apps/worker/src/index.ts": "7f79f12c75b18fcef7f2486fc0c7c1ffeb63aec332af0b400da10eee804ec29b",
+      "apps/worker/src/lib/reserved-refs.ts": "0b6f36396b807e9934a4a373662e526383c6715d7bc0c2152a2edfc01542c589",
+      "apps/worker/src/routes/liff.ts": "895b02b4c8fbf3dd110eee448b1ab0d6736913bb5501ed3a32864c640c97bc91",
+      "apps/worker/src/routes/r-account-links.test.ts": "38e1e3aad9be7a6c6eee1f79d464b6e2927530b049bb05e83f4db4f7d96078cb",
+      "apps/worker/src/routes/sagarifuji-attribution.test.ts": "95574d245421dde5b0a114011504847f5983f17224db608999c598b790b3456a",
+      "docs/sagarifuji-attribution.md": "c5b7cb337dfc39d0b0d3516aa186981ea15bc9ecbd2110a746df79c04b9c0f69",
+      "scripts/sagarifuji-attribution.py": "01445540ab9ef9a7ea15afeea0730fbaea85104ef8b55d551f29736fd76fceb8",
+      "scripts/test-sagarifuji-attribution.py": "fd0d69f69f2406208e33195a79b85cff5c4c54b936f19c34d43523d2801c0ac6",
+      "tasks/lessons.md": "2b709988473bb163b2f994c0d2c810b9f8a05716663ce0a06f6c7e22cd3dceb6"
+    },
+    "packet_sha256": "2a0ecd3489254df1c051a822caf3ca0e5b80d220b6b66cc3b715630c8d946a09"
+  },
+  "final_source_sha256": {
+    "apps/worker/src/index.ts": "8575dc54b5b91edb4c2459376e81d3723534f1f01d9a2a23ffac779eac01d81b",
+    "apps/worker/src/lib/reserved-refs.ts": "f138efc006b564abe1532cc7d094bffb1cdea446435a458a1e7eae58da60759d",
+    "apps/worker/src/routes/liff.ts": "895b02b4c8fbf3dd110eee448b1ab0d6736913bb5501ed3a32864c640c97bc91",
+    "apps/worker/src/routes/r-account-links.test.ts": "a85df4199e22fc4b5cdf7449f17abaa11aa323bc11154e3908f15990208df124",
+    "apps/worker/src/routes/sagarifuji-attribution.test.ts": "b9fb88ae930fcb19ccdaf391f5e504dc1b8b036c1955ed110de0cf49a5e96d8a",
+    "docs/sagarifuji-attribution.md": "a79a6a14219b6d13d11aca6bc4bd6088e051f1232f85b3ec235fcae21632c7d9",
+    "scripts/sagarifuji-attribution.py": "01445540ab9ef9a7ea15afeea0730fbaea85104ef8b55d551f29736fd76fceb8",
+    "scripts/test-sagarifuji-attribution.py": "fd0d69f69f2406208e33195a79b85cff5c4c54b936f19c34d43523d2801c0ac6",
+    "tasks/lessons.md": "2b709988473bb163b2f994c0d2c810b9f8a05716663ce0a06f6c7e22cd3dceb6"
+  },
+  "invocations": {
+    "sonnet-initial": {
+      "started_at": "2026-10-08T02:37:43.571571+00:00",
+      "model_requested": "claude-sonnet-5-5",
+      "packet_sha256": "2a0ecd3489254df1c051a822caf3ca0e5b80d220b6b66cc3b715630c8d946a09",
+      "credentials_changed": false,
+      "new_api_route": false,
+      "exit_code": 1,
+      "host_explicit_auth_error": false,
+      "completed_at": "2026-10-08T02:37:46.202680+00:00"
+    },
+    "sonnet": {
+      "started_at": "2026-10-08T02:39:43.236463+00:00",
+      "model_requested": "claude-sonnet-5-5",
+      "packet_sha256": "2a0ecd3489254df1c051a822caf3ca0e5b80d220b6b66cc3b715630c8d946a09",
+      "credentials_changed": false,
+      "new_api_route": false,
+      "exit_code": 1,
+      "host_explicit_auth_error": false,
+      "error_categories": [],
+      "completed_at": "2026-10-08T02:39:45.644644+00:00"
+    },
+    "grok": {
+      "started_at": "2026-10-08T02:37:39.282346+00:00",
+      "model_requested": "grok-4.7",
+      "packet_sha256": "2a0ecd3489254df1c051a822caf3ca0e5b80d220b6b66cc3b715630c8d946a09",
+      "credentials_changed": false,
+      "new_api_route": false,
+      "status": "timeout",
+      "completed_at": "2026-10-08T02:43:39.310086+00:00"
+    },
+    "opus": {
+      "started_at": "2026-10-08T02:41:12.590533+00:00",
+      "model_requested": "claude-opus-5-5",
+      "packet_sha256": "2a0ecd3489254df1c051a822caf3ca0e5b80d220b6b66cc3b715630c8d946a09",
+      "credentials_changed": false,
+      "new_api_route": false,
+      "exit_code": 0,
+      "host_explicit_auth_error": false,
+      "error_categories": [],
+      "actual_model_ids": [
+        "claude-opus-5-5"
+      ],
+      "completed_at": "2026-10-08T02:42:10.445153+00:00"
+    }
+  },
+  "opus_report": {
+    "verdict": "pass",
+    "issues": [
+      {
+        "severity": "minor",
+        "location": "apps/worker/src/lib/reserved-refs.ts isSagarifujiThreadsRef / scripts/sagarifuji-attribution.py aggregate",
+        "reason": "ゲート判定は大文字小文字を区別しない（toLowerCase）が、保存されるのは元の表記の ref（例: 'Sagarifuji-Threads'）です。一方、集計は 'sagarifuji-threads' との完全一致で数えます。表記が異なる専用 ref は account 照合を通って friends.ref_code と ref_tracking に書き込まれるのに、指標1・2と帰属不明のどれにも入りません。account 分離が崩れるわけではありませんが、帰属が気づかれないまま抜け落ちます。",
+        "required_action": "記録前に専用 ref を正規表記 'sagarifuji-threads' に統一するか、正規表記と完全一致しないものは /r と LIFF で拒否してください。あわせて、大文字小文字が異なる場合の fixture を追加してください。"
+      },
+      {
+        "severity": "minor",
+        "location": "docs/sagarifuji-attribution.md unknownConsultations の記述",
+        "reason": "文書では「非cancelled相談」としていますが、コードの帰属不明は status IN ('confirmed','completed') に限られます。confirmed/completed 以外の非cancelled ステータスがあれば、文書とコードで集計範囲が食い違います。",
+        "required_action": "文書を「confirmed/completed の相談」に直すか、意図する範囲をコードに合わせて明記してください。"
+      }
+    ],
+    "limitations": [
+      "渡された diff と抜粋だけを読んでレビューしました。ツールの実行、テストの実行、本番 DB の参照はしていません。",
+      "/auth/callback の loginChannelId の定義（code 交換と ID token 検証に実際に使われる channel）、upsertFriend が新規 friend の line_account_id をいつ設定するかは、抜粋に含まれていないため確認できていません。新規 friend の作成時に line_account_id が未設定なら、照合で弾かれて記録されません。安全側に倒れる動きですが、指標1が少なく出る可能性があります。",
+      "抜粋に含まれていない他の書込み経路（webhook の follow など）で、専用 ref が friends.ref_code や ref_tracking に書き込まれないかは確認していません。",
+      "ref_tracking と meet_consultations の書込み側の実際の日時形式は、文書の記述を前提にしており、writer のソースでは確かめていません。",
+      "sonnet のレポートは取得できず（exit 1）、grok は未提出です。この2件は通過扱いにしていません。",
+      "本番での ref 衝突確認、本番 Astra での LIFF 到達検収、CTA の採用、Saga の許可 URL の切替はいずれも未実施です。このコード審査の pass は、本番反映や公開の承認を意味しません。"
+    ]
+  },
+  "pm_disposition": {
+    "opus_critical_important_issues": 0,
+    "opus_minor_issues_fixed": true,
+    "sonnet_grok_results_unavailable": true,
+    "production_gate_complete": false,
+    "production_deployed": false,
+    "cta_changed": false,
+    "draft_pr_only": true
+  },
+  "post_review_delta": "canonical-only dedicated ref restriction, two mixed-case fixtures, consultation-status wording; test schema line_accounts fixture"
+}

@@ -100,6 +100,45 @@ beforeEach(() => {
 });
 
 describe('/r/:ref — ?account= resolution', () => {
+  it('pins the Saga ref to its account LIFF and preserves both parameters', async () => {
+    dbMocks.getLineAccountByChannelId.mockResolvedValue({ ...TESTIN, channel_id: '2011217182' });
+    const res = await get('/r/sagarifuji-threads?account=2011217182');
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('liff.line.me/2011177336-RWMDBXOl');
+    expect(html).toContain('ref%3Dsagarifuji-threads');
+    expect(html).toContain('account%3D2011217182');
+    expect(dbMocks.getEntryRouteByRefCode).not.toHaveBeenCalled();
+    expect(dbMocks.getTrafficPoolBySlug).not.toHaveBeenCalled();
+    expect(dbMocks.getAffiliateLinkByRefCode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '/r/sagarifuji-threads', '/r/sagarifuji-threads?account=999',
+    '/r/sagarifuji-threads?account=02011217182', '/r/sagarifuji-threads?account=2011217182%20',
+    '/r/Sagarifuji-Threads?account=2011217182',
+  ])(
+    'does not resolve a fallback for a noncanonical Saga ref or mismatched account (%s)', async (path) => {
+      const res = await get(path);
+      expect(res.status).toBe(400);
+      expect(await res.text()).not.toContain('liff.line.me');
+      expect(dbMocks.getLineAccountByChannelId).not.toHaveBeenCalled();
+      expect(dbMocks.getTrafficPoolBySlug).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([null, { ...TESTIN, channel_id: '2011217182', liff_id: null }, TESTIN])(
+    'does not fall back when the Saga account is unresolved or has no LIFF (%j)', async (account) => {
+      dbMocks.getLineAccountByChannelId.mockResolvedValue(account);
+      const res = await get('/r/sagarifuji-threads?account=2011217182');
+      expect(res.status).toBe(503);
+      expect(await res.text()).not.toContain('liff.line.me');
+      expect(dbMocks.getEntryRouteByRefCode).not.toHaveBeenCalled();
+      expect(dbMocks.getTrafficPoolBySlug).not.toHaveBeenCalled();
+      expect(dbMocks.getAffiliateLinkByRefCode).not.toHaveBeenCalled();
+    },
+  );
+
   it('resolves the account LIFF and skips the pool fallback', async () => {
     dbMocks.getLineAccountByChannelId.mockResolvedValue(TESTIN);
 
@@ -184,7 +223,7 @@ describe('/auth/line — mobile ?account= routing', () => {
     },
   );
 
-  it('reserved ref codes are rejected at entry-route creation', async () => {
+  it.each(['Dashboard', 'sagarifuji-threads'])('reserved ref %s is rejected at entry-route creation', async (refCode) => {
     const res = await worker.fetch(
       new Request('https://worker.example.com/api/entry-routes', {
         method: 'POST',
@@ -192,7 +231,7 @@ describe('/auth/line — mobile ?account= routing', () => {
           'content-type': 'application/json',
           authorization: 'Bearer env-key',
         },
-        body: JSON.stringify({ refCode: 'Dashboard', name: 'collision' }),
+        body: JSON.stringify({ refCode, name: 'collision' }),
       }),
       { ...env, API_KEY: 'env-key' } as typeof env,
       { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,

@@ -3,6 +3,14 @@ import { execSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
+const { assertNoPublicAdminKey } = require('../../scripts/public-admin-key-guard.cjs') as {
+  assertNoPublicAdminKey: (env?: NodeJS.ProcessEnv) => void
+}
+
+// Reject even an empty legacy value before Next can inline it into the client.
+// The error intentionally never includes the configured value.
+assertNoPublicAdminKey()
+
 const pkg = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf-8'))
 const repoRoot = resolve(__dirname, '../..')
 

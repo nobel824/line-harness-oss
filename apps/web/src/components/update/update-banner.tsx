@@ -9,14 +9,13 @@ import {
   type ReleaseEntry,
 } from '@/lib/update-client'
 import { UpdateButton } from './update-button'
+import { runBrowserSelfUpdateEffect } from './browser-update-policy'
 
 type Status =
   | { kind: 'loading' }
   | { kind: 'latest'; version: string }
   | { kind: 'fork'; reason: string; version: string }
   | { kind: 'upgrade'; current: string; target: ReleaseEntry }
-
-const updateBannerEnabled = process.env.NEXT_PUBLIC_UPDATE_BANNER_ENABLED !== 'false'
 
 // inject-version を通さないビルド (自前 CI/CD やローカル dev) のバージョン placeholder。
 // この場合「manifest に無い」のは当たり前なので fork 警告バナーは出さない。
@@ -28,9 +27,7 @@ export const MANUAL_UPDATE_GUIDE_URL =
 export function UpdateBanner() {
   const [status, setStatus] = useState<Status>({ kind: 'loading' })
 
-  useEffect(() => {
-    if (!updateBannerEnabled) return
-
+  useEffect(() => runBrowserSelfUpdateEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
@@ -70,7 +67,7 @@ export function UpdateBanner() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }), [])
 
   if (status.kind === 'loading') return null
 

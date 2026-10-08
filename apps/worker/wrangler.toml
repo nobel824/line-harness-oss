@@ -66,6 +66,10 @@ crons = ["* * * * *", "0 */6 * * *"]
 # ═══════════════════════════════════════════════════════════════
 # LOG_RETENTION_DAYS: days to keep messages_log rows (archived to R2 first).
 # Unset = keep forever (default). Set per-deployment, not here.
+# Optional Cloudflare Access browser login (keep secrets out of this file):
+# ADMIN_BROWSER_AUTH_MODE = "hybrid" # api_key (default) | hybrid | access
+# ADMIN_ACCESS_TEAM_DOMAIN = "https://your-team.cloudflareaccess.com"
+# ADMIN_ACCESS_AUD = "your-access-application-audience"
 [vars]
 WORKER_NAME = "line-harness"
 ADMIN_PAGES_PROJECT = "line-harness-admin"
