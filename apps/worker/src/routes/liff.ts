@@ -32,7 +32,7 @@ import { notifyAffiliateFriendAdd } from '../services/affiliate-notifier.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { awardActivityMileage } from '../services/activity-mileage.js';
 import { safeRedirectTarget } from '../lib/safe-redirect.js';
-import { isReservedRef } from '../lib/reserved-refs.js';
+import { canRecordRefForAccount, isReservedRef, isSagarifujiThreadsRef } from '../lib/reserved-refs.js';
 import { loginUnconfiguredPage } from '../lib/login-unconfigured.js';
 import type { Env } from '../index.js';
 import { verifyCrossAccountToken } from '../lib/cross-account-token.js';
@@ -784,6 +784,12 @@ liffRoutes.get('/auth/callback', async (c) => {
     const db = c.env.DB;
     const lineUserId = verified.sub;
 
+    // Only the channel that verified the ID token proves the account. OAuth
+    // state.account is a routing hint and may have fallen back to env credentials.
+    const verifiedRefAccount = isSagarifujiThreadsRef(ref)
+      ? (await getLineAccounts(db)).find((a) => a.login_channel_id === loginChannelId) ?? null
+      : null;
+
     // Detect a brand-new friend BEFORE upsertFriend creates the row, so the ASP
     // affiliate friend-add notification fires once per genuinely-new add (a
     // re-touch of an existing friend must not re-notify the affiliate).
@@ -838,7 +844,7 @@ liffRoutes.get('/auth/callback', async (c) => {
 
     // Attribution tracking
     // xh: refs are X Harness one-time tokens (the token IS the secret) — never persist as ref_code
-    if (ref && !ref.startsWith('xh:')) {
+    if (ref && !ref.startsWith('xh:') && canRecordRefForAccount(ref, verifiedRefAccount, friend.line_account_id)) {
       // Save ref_code on the friend record (first touch wins — only set if not already set)
       await db
         .prepare(`UPDATE friends SET ref_code = ? WHERE id = ? AND ref_code IS NULL`)
@@ -846,7 +852,7 @@ liffRoutes.get('/auth/callback', async (c) => {
         .run();
 
       // Look up entry route config
-      const route = await getEntryRouteByRefCode(db, ref);
+      const route = isSagarifujiThreadsRef(ref) ? null : await getEntryRouteByRefCode(db, ref);
 
       // Persist tracking event with ad click IDs
       await recordRefTracking(db, {
@@ -924,7 +930,8 @@ liffRoutes.get('/auth/callback', async (c) => {
     // Skip entirely when the referral link explicitly overrides account-level
     // friend_add scenarios (entry_routes.run_account_friend_add_scenarios = 0).
     const referralRouteForOverride =
-      ref && !ref.startsWith('xh:') ? await getEntryRouteByRefCode(db, ref) : null;
+      ref && !ref.startsWith('xh:') && !isSagarifujiThreadsRef(ref)
+        ? await getEntryRouteByRefCode(db, ref) : null;
     const runAccountScenariosLiff =
       !referralRouteForOverride || referralRouteForOverride.run_account_friend_add_scenarios !== 0;
 
@@ -1235,6 +1242,9 @@ liffRoutes.post('/api/liff/link', async (c) => {
     if (!friend) {
       return c.json({ success: false, error: 'Friend not found' }, 404);
     }
+    const recordRef = body.ref && canRecordRefForAccount(body.ref, matchedAccount, friend.line_account_id)
+      ? body.ref
+      : '';
 
     let linkedUserId = (friend as unknown as Record<string, unknown>).user_id as string | null;
     if (body.crossAccountToken) {
@@ -1264,28 +1274,28 @@ liffRoutes.post('/api/liff/link', async (c) => {
 
     if (linkedUserId) {
       // Still save ref even if already linked (but never persist xh: tokens as ref_code)
-      if (body.ref && !body.ref.startsWith('xh:')) {
+      if (recordRef && !recordRef.startsWith('xh:')) {
         await db.prepare('UPDATE friends SET ref_code = ? WHERE id = ? AND ref_code IS NULL')
-          .bind(body.ref, friend.id).run();
+          .bind(recordRef, friend.id).run();
       }
       // Apply ref attribution (tag + scenario push) for already-linked friends.
       // /auth/callback only fires for new OAuth flows, so existing friends
       // would otherwise miss tracked-link campaigns triggered by /api/liff/link.
       // Mirror the new-link branch's recordRefTracking call so analytics
       // (/api/analytics/ref-summary) include LIFF hits from existing friends.
-      if (body.ref && !body.ref.startsWith('xh:')) {
+      if (recordRef && !recordRef.startsWith('xh:')) {
         try {
-          const route = await getEntryRouteByRefCode(db, body.ref);
+          const route = isSagarifujiThreadsRef(recordRef) ? null : await getEntryRouteByRefCode(db, recordRef);
           await recordRefTracking(db, {
-            refCode: body.ref,
+            refCode: recordRef,
             friendId: friend.id,
             entryRouteId: route?.id ?? null,
             sourceUrl: null,
           });
         } catch { /* silent */ }
       }
-      if (body.ref) {
-        await applyRefAttribution(c, body.ref, friend, lineUserId, {
+      if (recordRef) {
+        await applyRefAttribution(c, recordRef, friend, lineUserId, {
           accountChannelId: matchedAccount?.channel_id ?? null,
         });
       }
@@ -1338,15 +1348,15 @@ liffRoutes.post('/api/liff/link', async (c) => {
 
     // Save ref_code from LIFF (first touch wins)
     // xh: refs are X Harness one-time tokens — never persist as ref_code
-    if (body.ref && !body.ref.startsWith('xh:')) {
+    if (recordRef && !recordRef.startsWith('xh:')) {
       await db.prepare('UPDATE friends SET ref_code = ? WHERE id = ? AND ref_code IS NULL')
-        .bind(body.ref, friend.id).run();
+        .bind(recordRef, friend.id).run();
 
       // Record ref tracking
       try {
-        const route = await getEntryRouteByRefCode(db, body.ref);
+        const route = isSagarifujiThreadsRef(recordRef) ? null : await getEntryRouteByRefCode(db, recordRef);
         await recordRefTracking(db, {
-          refCode: body.ref,
+          refCode: recordRef,
           friendId: friend.id,
           entryRouteId: route?.id ?? null,
           sourceUrl: null,
@@ -1354,7 +1364,7 @@ liffRoutes.post('/api/liff/link', async (c) => {
       } catch { /* silent */ }
 
       // Apply ref attribution (tag + scenario push) for newly-linked friends
-      await applyRefAttribution(c, body.ref, friend, lineUserId, {
+      await applyRefAttribution(c, recordRef, friend, lineUserId, {
         accountChannelId: matchedAccount?.channel_id ?? null,
       });
     }

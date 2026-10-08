@@ -31,6 +31,7 @@ import { usage } from './routes/usage.js';
 import { inbox } from './routes/inbox.js';
 import { openapi } from './routes/openapi.js';
 import { liffRoutes } from './routes/liff.js';
+import { isSagarifujiThreadsRef, SAGARIFUJI_LINE_CHANNEL_ID, SAGARIFUJI_THREADS_REF } from './lib/reserved-refs.js';
 import { affiliateSelfRoutes } from './routes/affiliate-self.js';
 // Round 3 ルート
 import { webhooks } from './routes/webhooks.js';
@@ -311,9 +312,16 @@ app.get('/r/:ref', async (c) => {
   // working; only the account choice is fixed. Unknown channel_id or an
   // account without liff_id falls through to the normal resolution chain.
   const accountParam = c.req.query('account') || '';
+  const sagaRef = isSagarifujiThreadsRef(ref);
+  if (sagaRef && (ref !== SAGARIFUJI_THREADS_REF || accountParam !== SAGARIFUJI_LINE_CHANNEL_ID)) {
+    return c.text('このリンクは現在利用できません。', 400);
+  }
   let accountResolved = false;
   if (accountParam) {
     const account = await getLineAccountByChannelId(c.env.DB, accountParam);
+    if (sagaRef && (account?.channel_id !== SAGARIFUJI_LINE_CHANNEL_ID || !account.liff_id)) {
+      return c.text('このリンクは現在利用できません。', 503);
+    }
     if (account?.liff_id) {
       liffUrl = `https://liff.line.me/${account.liff_id}`;
       accountResolved = true;
