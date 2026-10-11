@@ -41,9 +41,11 @@ import { scoring } from './routes/scoring.js';
 import { templates } from './routes/templates.js';
 import { chats } from './routes/chats.js';
 import { conversations } from './routes/conversations.js';
-// notifications ルート (notification_rules CRUD + notifications 一覧) は
-// インボックス機能 (/api/inbox/unanswered) に置き換えたため削除。
-// DB テーブル notification_rules / notifications は archive 目的で残してある。
+// notifications ルート: 一度インボックス機能 (/api/inbox/unanswered) に置き換えて
+// 削除したが、クォータ不足通知 (services/quota-alert.ts, 2026-09-01 事故対応) が
+// notifications / notification_rules に書き込むようになったため再マウント。
+// 書き込み側だけ復活して読み手が居ないと「通知したつもり」になるのが最悪のため。
+import { notifications } from './routes/notifications.js';
 import { stripe } from './routes/stripe.js';
 import { health } from './routes/health.js';
 import { automations } from './routes/automations.js';
@@ -60,6 +62,7 @@ import { setup } from './routes/setup.js';
 import { autoReplies } from './routes/auto-replies.js';
 import { adminAuth } from './routes/admin-auth.js';
 import { resolveCorsOrigin } from './middleware/admin-auth-config.js';
+import { defaultCachePolicyMiddleware } from './middleware/cache-policy.js';
 import booking from './routes/booking.js';
 import events from './routes/events.js';
 import { trafficPools } from './routes/traffic-pools.js';
@@ -135,6 +138,9 @@ export type Env = {
     // the Worker keeps a refresh token and never needs a service-account key.
     GOOGLE_OAUTH_CLIENT_ID?: string;
     GOOGLE_OAUTH_CLIENT_SECRET?: string;
+    GOOGLE_CALENDAR_BROKER_URL?: string;
+    GOOGLE_CALENDAR_TENANT_ID?: string;
+    GOOGLE_CALENDAR_BROKER_SECRET?: string;
     /** Days to keep messages_log rows. Unset/invalid = keep forever. */
     LOG_RETENTION_DAYS?: string;
     /** Max friends (is_following=1). Unset/invalid = unlimited. */
@@ -156,6 +162,11 @@ export type Env = {
 };
 
 const app = new Hono<Env>();
+
+// Private Workers Cache pilot: only responses that deliberately declare a
+// public Cache-Control policy may enter the cache. This wrapper runs after all
+// downstream handlers and supplies no-store to every unmarked response.
+app.use('*', defaultCachePolicyMiddleware);
 
 // Public form endpoint used by the-harness.com. Keep this allowlist separate
 // from credentialed admin CORS so the media origin gains access to this route
@@ -180,8 +191,11 @@ app.use('*', cors({
   origin: (origin, c) => resolveCorsOrigin(c.env, origin, c.req.url),
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+<<<<<<< HEAD
   // Idempotency-Key は admin (別オリジン) の POST /api/broadcasts が送る。
   // 許可しないと preflight で弾かれ、POST 自体がブラウザに止められる。
+=======
+>>>>>>> upstream/main
   allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'x-admin-api-key', 'Idempotency-Key'],
   maxAge: 600,
 }));
@@ -220,6 +234,7 @@ app.route('/', reminders);
 app.route('/', scoring);
 app.route('/', templates);
 app.route('/', chats);
+app.route('/', notifications);
 app.route('/', conversations);
 app.route('/', stripe);
 app.route('/', health);

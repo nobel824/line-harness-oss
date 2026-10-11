@@ -92,12 +92,19 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
   }
 
   const separator = condition.operator === 'AND' ? ' AND ' : ' OR '
+<<<<<<< HEAD
   // is_following = 1 を常に強制する（フォーク独自）。ブロック / 解除済みの友だちへ
   // 配信しないため。upstream は条件なし。
   const where = clauses.length > 0
     ? `f.is_following = 1 AND (${clauses.join(separator)})`
     : 'f.is_following = 1'
   const sql = `SELECT f.id, f.line_user_id, f.display_name FROM friends f WHERE ${where} ORDER BY f.created_at ASC, f.id ASC`
+=======
+  const where = clauses.length > 0 ? clauses.join(separator) : '1=1'
+  // Callers prepend account/following constraints. Keep the complete segment
+  // grouped so `account AND (left OR right)` cannot become `(account AND left) OR right`.
+  const sql = `SELECT f.id, f.line_user_id, f.display_name FROM friends f WHERE (${where}) ORDER BY f.created_at ASC, f.id ASC`
+>>>>>>> upstream/main
 
   return { sql, bindings }
 }
