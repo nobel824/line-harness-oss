@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS "broadcasts" (
   account_ids        TEXT CHECK (account_ids IS NULL OR json_valid(account_ids)),
   dedup_priority     TEXT CHECK (dedup_priority IS NULL OR json_valid(dedup_priority)),
   failed_account_ids TEXT CHECK (failed_account_ids IS NULL OR json_valid(failed_account_ids))
-, dedup_progress TEXT, batch_lock_at TEXT, track_links INTEGER NOT NULL DEFAULT 1);
+, dedup_progress TEXT, batch_lock_at TEXT, track_links INTEGER NOT NULL DEFAULT 1, last_error TEXT);
 
 CREATE TABLE IF NOT EXISTS calendar_bookings (
   id             TEXT PRIMARY KEY,
@@ -422,6 +422,12 @@ CREATE TABLE IF NOT EXISTS forms (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 , on_submit_message_type TEXT CHECK (on_submit_message_type IN ('text', 'flex')) DEFAULT NULL, on_submit_message_content TEXT DEFAULT NULL, on_submit_webhook_url TEXT, on_submit_webhook_headers TEXT, on_submit_webhook_fail_message TEXT, og_title TEXT, og_description TEXT, og_image_url TEXT);
+
+CREATE TABLE IF NOT EXISTS friend_external_ids (
+ id TEXT PRIMARY KEY,friend_id TEXT NOT NULL,line_account_id TEXT NOT NULL,provider TEXT NOT NULL,
+ external_id TEXT NOT NULL,username TEXT,linked_at INTEGER NOT NULL,source_gate_id TEXT NOT NULL,method TEXT NOT NULL,
+ UNIQUE(friend_id,provider,source_gate_id),UNIQUE(line_account_id,provider,external_id,source_gate_id)
+);
 
 CREATE TABLE IF NOT EXISTS friend_reminder_deliveries (
   id                TEXT PRIMARY KEY,
@@ -714,7 +720,8 @@ CREATE TABLE IF NOT EXISTS notification_rules (
   channels     TEXT NOT NULL DEFAULT '["webhook"]',
   is_active    INTEGER NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
-  updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+  updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  line_account_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -726,7 +733,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   channel         TEXT NOT NULL,
   status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
   metadata        TEXT,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  line_account_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS operators (
@@ -1163,6 +1171,41 @@ CREATE TABLE IF NOT EXISTS webinars (
   updated_at TEXT NOT NULL
 , intro_text TEXT, intro_image_url TEXT, pre_registration_form_id TEXT REFERENCES forms(id), funnel_entry_tag_id TEXT, funnel_invite_tag_id TEXT);
 
+CREATE TABLE IF NOT EXISTS x_gate_campaigns (
+ gate_id TEXT PRIMARY KEY,connection_id TEXT NOT NULL,line_account_id TEXT NOT NULL,
+ slug TEXT NOT NULL,title TEXT NOT NULL,tier TEXT NOT NULL,tracked_link_id TEXT NOT NULL UNIQUE,
+ tags TEXT NOT NULL,scenarios TEXT NOT NULL DEFAULT '{}',request_hash TEXT NOT NULL,
+ is_active INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS x_gate_entries (
+ gate_id TEXT NOT NULL,friend_id TEXT NOT NULL,line_account_id TEXT NOT NULL,line_user_id TEXT NOT NULL,following INTEGER NOT NULL DEFAULT 0,participant_id TEXT,
+ state TEXT NOT NULL DEFAULT 'entered',result TEXT,challenge_at INTEGER,reward_reply_at INTEGER,last_seen_at INTEGER NOT NULL,created_at INTEGER NOT NULL,
+ PRIMARY KEY(gate_id,friend_id)
+);
+
+CREATE TABLE IF NOT EXISTS x_gate_inbox (
+ delivery_id TEXT PRIMARY KEY,body_hash TEXT NOT NULL,event TEXT NOT NULL,payload TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'pending',lease_until INTEGER,owner TEXT,created_at INTEGER NOT NULL,
+ last_error TEXT,completed_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS x_gate_notifications (
+ gate_id TEXT NOT NULL,friend_id TEXT NOT NULL,method TEXT NOT NULL CHECK(method IN ('reply','push')),
+ delivery_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER NOT NULL,
+ PRIMARY KEY(gate_id,friend_id)
+);
+
+CREATE TABLE IF NOT EXISTS x_gate_outbox (
+ id TEXT PRIMARY KEY,gate_id TEXT NOT NULL,friend_id TEXT NOT NULL,type TEXT NOT NULL,source_id TEXT NOT NULL,
+ payload TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
+ last_error TEXT,lease_until INTEGER,owner TEXT,UNIQUE(gate_id,friend_id,type,source_id)
+);
+
+CREATE TABLE IF NOT EXISTS x_gate_reply_receipts (
+ source_id TEXT PRIMARY KEY,friend_id TEXT NOT NULL,gate_id TEXT NOT NULL,status TEXT NOT NULL,reward_response INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_ad_conversion_logs_friend ON ad_conversion_logs (friend_id);
 
 CREATE INDEX IF NOT EXISTS idx_ad_conversion_logs_platform ON ad_conversion_logs (ad_platform_id);
@@ -1278,7 +1321,8 @@ CREATE INDEX IF NOT EXISTS idx_friends_user_id ON friends (user_id);
 CREATE INDEX IF NOT EXISTS idx_google_calendar_connections_staff
   ON google_calendar_connections (line_account_id, staff_id, is_active);
 
-CREATE INDEX IF NOT EXISTS idx_health_logs_account ON account_health_logs (line_account_id);
+CREATE INDEX IF NOT EXISTS idx_health_logs_account_created_at
+  ON account_health_logs (line_account_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON booking_idempotency_keys (expires_at);
 
@@ -1337,6 +1381,8 @@ CREATE INDEX IF NOT EXISTS idx_mileage_rules_match
   ON mileage_rules(program_id, event_type, source, is_active);
 
 CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications (created_at);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_event_account ON notifications (event_type, line_account_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications (status);
 
@@ -1434,6 +1480,8 @@ CREATE INDEX IF NOT EXISTS idx_webinar_viewers_webinar
 CREATE UNIQUE INDEX IF NOT EXISTS uq_google_calendar_connections_active_staff
   ON google_calendar_connections (staff_id)
   WHERE staff_id IS NOT NULL AND is_active = 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS x_gate_entry_line_identity ON x_gate_entries(gate_id,line_user_id);
 
 INSERT OR IGNORE INTO auto_replies (id, keyword, match_type, response_type, response_content, template_id, line_account_id, is_active, created_at)
 VALUES ('builtin-mileage-wallet-keyword', 'マイル', 'exact', 'flex', '{"type":"bubble","size":"kilo","body":{"type":"box","layout":"vertical","paddingAll":"20px","contents":[{"type":"text","text":"あなたのHarnessマイル","weight":"bold","size":"lg","color":"#1e293b"},{"type":"text","text":"現在のマイル、獲得履歴、登録済みアカウント、次にマイルを獲得できる行動を確認できます。","wrap":true,"size":"sm","color":"#64748b","margin":"md"}]},"footer":{"type":"box","layout":"vertical","paddingAll":"16px","contents":[{"type":"button","style":"primary","color":"#06C755","height":"sm","action":{"type":"uri","label":"マイルを確認する","uri":"https://liff.line.me/{{liff_id}}/?page=affiliate&liffId={{liff_id}}"}}]}}', NULL, NULL, 1, '2026-08-11T00:00:00.000+09:00');
