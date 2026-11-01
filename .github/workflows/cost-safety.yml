@@ -1,0 +1,33 @@
+name: Cost Safety
+on:
+  pull_request:
+    paths: ['packages/db/**', 'apps/worker/**', 'scripts/cost/**', 'docs/engineering/cloudflare-cost-review.md', '.github/workflows/cost-safety.yml', 'pnpm-lock.yaml', 'package.json']
+  push:
+    branches: [main]
+    paths: ['packages/db/**', 'apps/worker/**', 'scripts/cost/**', 'docs/engineering/cloudflare-cost-review.md', '.github/workflows/cost-safety.yml', 'pnpm-lock.yaml', 'package.json']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cost-safety-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  wallet-complexity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pnpm install --frozen-lockfile
+      - run: node packages/db/scripts/generate-bootstrap.mjs --check
+      - run: pnpm --filter @line-crm/db exec vitest run test/mileage-cost.test.ts test/mileage-rules.test.ts
+      - run: node --test scripts/cost/*.test.mjs
+      - run: python3 -m unittest discover -s scripts/cost -p "test_*.py"
+      - run: node scripts/cost/cost-model.mjs scripts/cost/assumptions.example.json
