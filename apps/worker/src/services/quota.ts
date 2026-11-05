@@ -43,6 +43,61 @@ export function monthStartJst(now: Date = new Date()): string {
   return jst.toISOString().slice(0, 7) + '-01T00:00:00.000';
 }
 
+/** yyyyMMdd of the JST day `daysAgo` days in the past (0 = today). */
+export function jstYyyyMmDd(daysAgo: number, now: Date = new Date()): string {
+  const jst = new Date(now.getTime() + 9 * 3600_000 - daysAgo * 86_400_000);
+  return jst.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/**
+ * Per-account count of messages sent this JST month, approximating LINE's
+ * official 「配信済みメッセージ数」: push-type messages_log rows (joined through
+ * friends.line_account_id — legacy rows carry no ml.line_account_id) plus the
+ * success_count of all-target broadcasts sent through LINE's broadcast API,
+ * which write no per-recipient messages_log rows (same term as getQuotaUsage
+ * below). Broadcast rows with a NULL line_account_id (single-account era) are
+ * deliberately excluded — they cannot be attributed to one account.
+ *
+ * ⚠️ 概算 (上振れ側): all-target broadcast の success_count は送信直前の
+ * `line_account_id = ? OR IS NULL` COUNT のスナップショットで、マルチアカウント
+ * 運用では共有 legacy NULL プールが各アカウントの配信に重複計上される
+ * (broadcast.ts の followerRow コメント参照 — 制限用途では over-count が安全側)。
+ * 正確な消費量は同じ delivery-health 応答の LINE 公式 consumption を見ること。
+ *
+ * Single definition shared by GET /api/line-accounts (stats.messagesThisMonth)
+ * and GET /api/line-accounts/delivery-health so the two dashboard numbers
+ * never disagree.
+ */
+export async function countAccountMonthlyMessages(
+  db: D1Database,
+  lineAccountId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = monthStartJst(now);
+  const [logRow, bcRow] = await Promise.all([
+    db
+      .prepare(
+        `SELECT COUNT(*) as count FROM messages_log ml
+          INNER JOIN friends f ON f.id = ml.friend_id
+          WHERE ml.direction = 'outgoing'
+            AND (ml.delivery_type IS NULL OR ml.delivery_type = 'push')
+            AND ml.created_at >= ? AND f.line_account_id = ?`,
+      )
+      .bind(cutoff, lineAccountId)
+      .first<{ count: number }>(),
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(success_count), 0) as count FROM broadcasts
+          WHERE target_type = 'all'
+            AND line_request_id IS NOT NULL
+            AND sent_at >= ? AND line_account_id = ?`,
+      )
+      .bind(cutoff, lineAccountId)
+      .first<{ count: number }>(),
+  ]);
+  return (logRow?.count ?? 0) + (bcRow?.count ?? 0);
+}
+
 export type QuotaUsage = {
   friends: { used: number; max: number };
   monthlyMessages: { used: number; max: number };
@@ -121,20 +176,8 @@ export async function estimateSendAudience(
 ): Promise<number | null> {
   if (broadcast.target_type === 'tag') {
     if (!broadcast.target_tag_id) return null;
-    // Deliberately NO account filter here, even for an account-bound
-    // broadcast: the actual tag send path (getFriendsByTag in broadcast.ts)
-    // messages every following friend with the tag regardless of account.
-    // The estimate must mirror what will really be sent — an account-filtered
-    // count would undercount and let a send slip past the monthly limit.
-    const row = await db
-      .prepare(
-        `SELECT COUNT(*) as count FROM friends
-          WHERE is_following = 1
-            AND EXISTS (SELECT 1 FROM friend_tags ft WHERE ft.friend_id = friends.id AND ft.tag_id = ?)`,
-      )
-      .bind(broadcast.target_tag_id)
-      .first<{ count: number }>();
-    return row?.count ?? 0;
+    // Same account + following + tag conditions as inline and queued delivery.
+    return personalizedAudienceCount(db, broadcast);
   }
   if (broadcast.target_type !== 'all') return null;
   const accountId = (broadcast as unknown as Record<string, unknown>).line_account_id as string | null;
@@ -154,32 +197,13 @@ export async function estimateSendAudience(
   return row?.count ?? 0;
 }
 
-/**
- * Audience COUNT of a queued (tag-marker) tag send: the exact population the
- * queue executor delivers to. The marker carries only a tag_exists rule, so
- * there is deliberately NO is_following filter — unfollowed tagged rows are
- * part of the send (and log) population — and the account filter is the same
- * strict equality the executor injects. Returns null without a tag id.
- */
+/** Exact tag audience, shared by inline estimates and legacy queued markers. */
 export async function queuedTagAudienceCount(
   db: D1Database,
   broadcast: { target_type: string; target_tag_id?: string | null },
 ): Promise<number | null> {
   if (!broadcast.target_tag_id) return null;
-  const accountId = (broadcast as unknown as Record<string, unknown>).line_account_id as string | null;
-  const where: string[] = [
-    'EXISTS (SELECT 1 FROM friend_tags ft WHERE ft.friend_id = f.id AND ft.tag_id = ?)',
-  ];
-  const binds: unknown[] = [broadcast.target_tag_id];
-  if (accountId) {
-    where.unshift('f.line_account_id = ?');
-    binds.unshift(accountId);
-  }
-  const row = await db
-    .prepare(`SELECT COUNT(*) as count FROM friends f WHERE ${where.join(' AND ')}`)
-    .bind(...binds)
-    .first<{ count: number }>();
-  return row?.count ?? 0;
+  return personalizedAudienceCount(db, broadcast);
 }
 
 /**
