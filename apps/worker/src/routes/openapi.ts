@@ -3,6 +3,24 @@ import type { Env } from '../index.js';
 
 const openapi = new Hono<Env>();
 
+const gateHeaders = ['X-Harness-Connection-Id','X-Harness-Event','X-Harness-Delivery-Id','X-Harness-Timestamp','X-Harness-Signature'].map(name=>({name,in:'header',required:true,schema:{type:'string'}}));
+const gateIdentityBody = {required:true,content:{'application/json':{schema:{type:'object',required:['idToken','accessToken'],properties:{idToken:{type:'string'},accessToken:{type:'string'},turnstileToken:{type:'string',description:'Required for initial strict participation'}}}}}};
+
+const friendIdempotencyHeader = {
+  name: 'Idempotency-Key', in: 'header', schema: { type: 'string', minLength: 1, maxLength: 255 },
+  description: 'Optional, per friend (tag add/remove share a scope). Retained indefinitely. Completed calls replay the original response; changed input returns 422. Keyed LINE sends freeze the first payload and never reclaim an in-flight send. An unresolved send at/after 24h requires manual review; do not replace its key. Without this header, existing behavior is unchanged.',
+};
+const lineIdempotencyConflict = {
+  description: 'API request or LINE send in progress; or unknown LINE delivery at/after 24h from its first start (code=line_delivery_requires_review, requiresReview=true). No automatic resend beyond 24h. Verify delivery manually; do not substitute a new key. LINE acceptance does not guarantee end-user receipt.',
+  content: { 'application/json': { schema: {
+    type: 'object', properties: {
+      success: { type: 'boolean', const: false }, error: { type: 'string' },
+      code: { type: 'string', enum: ['line_send_in_progress', 'line_delivery_requires_review'] },
+      requiresReview: { type: 'boolean' },
+    },
+  } } },
+};
+
 const spec = {
   openapi: '3.1.0',
   info: {
@@ -96,6 +114,11 @@ const spec = {
           sentAt: { type: 'string', nullable: true },
           totalCount: { type: 'integer' },
           successCount: { type: 'integer' },
+          lastError: {
+            type: 'string',
+            nullable: true,
+            description: '直近の送信失敗理由 (LINE プランクォータ不足ガード等)。送信成功で null に戻る。',
+          },
           createdAt: { type: 'string', format: 'date-time' },
         },
       },
@@ -173,6 +196,99 @@ const spec = {
     },
   },
   paths: {
+    '/api/auth/migrate-keys': {
+      post: {
+        summary: 'Owner: hash up to 25 existing staff keys',
+        responses: { '200': { description: 'migrated count; repeat until zero. Existing raw keys remain valid as Bearer credentials.' } },
+      },
+    },
+    '/api/auth/sessions/revoke': {
+      post: {
+        summary: 'Revoke all sessions for the authenticated staff member',
+        responses: { '200': { description: 'Sessions revoked' } },
+      },
+    },
+    '/api/auth/maintenance': {
+      post: {
+        summary: 'Owner: purge up to 100 expired rows per auth table (audit retention 90 days)',
+        responses: { '200': { description: 'Bounded maintenance complete' } },
+      },
+    },
+    '/api/incoming-images/{key}': {
+      get: {
+        summary: 'Read an incoming image with a session or messages:read key',
+        parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Private image; no-store' }, '401': { description: 'Authentication required' } },
+      },
+    },
+    '/api/integrations/x-harness/capabilities': {
+      get: {
+        tags: ['X gate integration'], summary: 'Discover supported campaign events before sending. Requires signed x.campaign.capabilities headers.',
+        security: [], parameters: gateHeaders,
+        responses: { '200': { description: 'Supported schema, events, followup and display capabilities' }, '401': { description: 'Invalid signature or connection' } },
+      },
+    },
+    '/api/x-campaign-notifications/{accountId}': {
+      get: {
+        tags:['X gate integration'],summary:'Read the locally configured operator digest recipients. Owner/admin only.',
+        parameters:[{name:'accountId',in:'path',required:true,schema:{type:'string'}}],responses:{'200':{description:'Configured friend IDs and display names within this account'},'403':{description:'Admin required'},'404':{description:'Account not found'}},
+      },
+      put: {
+        tags: ['X gate integration'], summary: 'Configure operator digest recipients on the LINE side. Owner/admin only; maximum five friend IDs belonging to this LINE account. An empty array disables recipients.',
+        parameters: [{ name: 'accountId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['friendIds'], properties: { friendIds: { type: 'array', maxItems: 5, uniqueItems: true, items: { type: 'string' } } } } } } },
+        responses: { '200': { description: 'Configuration saved; no messages sent' }, '400': { description: 'Invalid recipients or account mismatch' }, '403': { description: 'Admin required' }, '404': { description: 'Account not found' } },
+      },
+    },
+    '/api/liff/x-gates/{gateId}/followup': {
+      post: {
+        tags: ['X gate integration'], summary: 'Explicitly opt in after a lost result using verified LINE tokens. Allocates an optional coupon once and records only the selected consent. Does not send a push message.',
+        security: [], parameters: [{ name: 'gateId', in: 'path', required: true, schema: { type: 'string' } }], requestBody: gateIdentityBody,
+        responses: { '200': { description: 'Consent recorded; coupon or null returned for display' }, '401': { description: 'Invalid LINE identity' }, '404': { description: 'Campaign not found' }, '503': { description: 'Follow-up temporarily unavailable' } },
+      },
+    },
+    '/api/integrations/x-harness/campaigns': {
+      post: {
+        tags: ['X gate integration'], summary: 'Create LINE campaign assets atomically. Admin authentication plus xh.gate.v1 HMAC required.',
+        security: [{ bearerAuth: [] }], parameters: gateHeaders,
+        responses: { '200': {description:'Success'}, '401': {description:'Invalid identity or signature'}, '409': {description:'Idempotency conflict'}, '503': {description:'Retryable dependency failure'} },
+      },
+    },
+    '/api/integrations/x-harness/campaigns/{id}/cancel': {
+      post: {
+        tags: ['X gate integration'], summary: 'Deactivate a campaign without deleting delivery history. Admin authentication plus HMAC required.',
+        security: [{ bearerAuth: [] }], parameters: [...gateHeaders,{name:'id',in:'path',required:true,schema:{type:'string'}}],
+        responses: { '200': {description:'Success'}, '401': {description:'Invalid identity or signature'}, '409': {description:'Idempotency conflict'}, '503': {description:'Retryable dependency failure'} },
+      },
+    },
+    '/api/integrations/x-harness/events': {
+      post: {
+        tags: ['X gate integration'], summary: 'Apply signed gate events and x.campaign.digest / x.campaign.early_notice idempotently. Digests use locally configured administrators; early notices create approval-required broadcast drafts only. Delivery ID, timestamp, connection ID and HMAC are mandatory.',
+        security: [], parameters: gateHeaders,
+        responses: { '200': {description:'Success'}, '401': {description:'Invalid identity or signature'}, '409': {description:'Idempotency conflict'}, '503': {description:'Retryable dependency failure'} },
+      },
+    },
+    '/api/integrations/x-harness/engagement': {
+      get: {
+        tags: ['X gate integration'], summary: 'Return observed incoming-message engagement for a signed gate request.',
+        security: [], parameters: [...gateHeaders,{name:'gateId',in:'query',required:true,schema:{type:'string'}}],
+        responses: { '200': {description:'Success'}, '401': {description:'Invalid identity or signature'}, '409': {description:'Idempotency conflict'}, '503': {description:'Retryable dependency failure'} },
+      },
+    },
+    '/api/liff/x-gates/{gateId}/join': {
+      post: {
+        tags: ['X gate integration'], summary: 'Join with verified LINE ID/access tokens for the campaign channel; no X ID input.',
+        security: [], parameters: [{name:'gateId',in:'path',required:true,schema:{type:'string'}}], requestBody: gateIdentityBody,
+        responses: { '200': {description:'Success'}, '401': {description:'Invalid identity or signature'}, '409': {description:'Idempotency conflict'}, '503': {description:'Retryable dependency failure'} },
+      },
+    },
+    '/api/liff/x-gates/{gateId}/check': {
+      post: {
+        tags: ['X gate integration'], summary: 'Check participation using verified LINE tokens. Returns actual state and retryAfterSec.',
+        security: [], parameters: [{name:'gateId',in:'path',required:true,schema:{type:'string'}}], requestBody: gateIdentityBody,
+        responses: { '200': {description:'Success'}, '401': {description:'Invalid identity or signature'}, '409': {description:'Idempotency conflict'}, '503': {description:'Retryable dependency failure'} },
+      },
+    },
     // ── Friends ─────────────────────────────────────────────────────────────
     '/api/friends': {
       get: {
@@ -182,8 +298,18 @@ const spec = {
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
           { name: 'tagId', in: 'query', schema: { type: 'string' } },
+          { name: 'lineAccountId', in: 'query', schema: { type: 'string' } },
+          {
+            name: 'lineUserId',
+            in: 'query',
+            schema: { type: 'string' },
+            description: 'Exact LINE user ID match. Requires lineAccountId; never falls back to another account.',
+          },
         ],
-        responses: { '200': { description: 'Paginated friends list' } },
+        responses: {
+          '200': { description: 'Paginated friends list' },
+          '400': { description: 'lineUserId given without a value or without lineAccountId' },
+        },
       },
     },
     '/api/friends/count': {
@@ -215,13 +341,33 @@ const spec = {
         },
       },
     },
+    '/api/friends/{id}/messages': {
+      post: {
+        tags: ['Friends'], summary: '友だちへ個別送信',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          friendIdempotencyHeader,
+        ],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object', required: ['content'], properties: {
+            content: { type: 'string' }, messageType: { type: 'string', default: 'text' },
+            altText: { type: 'string' }, trackLinks: { type: 'boolean', default: true },
+          },
+        } } } },
+        responses: {
+          '200': { description: 'Sent or replayed original messageId' },
+          '409': lineIdempotencyConflict,
+          '422': { description: 'Idempotency-Key reused for different input' },
+        },
+      },
+    },
     '/api/friends/{id}/tags': {
       post: {
         tags: ['Friends'],
         summary: '友だちにタグ追加',
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }, friendIdempotencyHeader],
         requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { tagId: { type: 'string' } }, required: ['tagId'] } } } },
-        responses: { '201': { description: 'Tag added' } },
+        responses: { '201': { description: 'Tag added' }, '409': lineIdempotencyConflict, '422': { description: 'Idempotency-Key reused for different input' } },
       },
     },
     '/api/friends/{id}/tags/{tagId}': {
@@ -231,8 +377,9 @@ const spec = {
         parameters: [
           { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
           { name: 'tagId', in: 'path', required: true, schema: { type: 'string' } },
+          friendIdempotencyHeader,
         ],
-        responses: { '200': { description: 'Tag removed' } },
+        responses: { '200': { description: 'Tag removed' }, '409': lineIdempotencyConflict, '422': { description: 'Idempotency-Key reused for different input' } },
       },
     },
     // ── Tags ────────────────────────────────────────────────────────────────
@@ -439,6 +586,15 @@ const spec = {
         responses: { '201': { description: 'Account created' } },
       },
     },
+    '/api/line-accounts/delivery-health': {
+      get: {
+        tags: ['LINE Accounts'],
+        summary: 'アカウント別 配信健全性 (クォータ残・友だち/ブロック前日比・今月配信数)',
+        description:
+          'アクティブな全アカウントについて、LINE 月間クォータ (上限/消費/残り) と前日時点の友だち数・ブロック数 (前日比つき)、当月の push 配信数を一括で返す。残クォータが配信可能友だち数を下回ると quotaAlert=true (全員配信が完走できない状態)。',
+        responses: { '200': { description: 'Per-account delivery health snapshot' } },
+      },
+    },
     '/api/line-accounts/order': {
       patch: {
         tags: ['LINE Accounts'],
@@ -517,8 +673,20 @@ const spec = {
       post: {
         tags: ['Conversions'],
         summary: 'コンバージョン記録',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { conversionPointId: { type: 'string' }, friendId: { type: 'string' }, userId: { type: 'string' }, affiliateCode: { type: 'string' }, metadata: { type: 'object' } }, required: ['conversionPointId', 'friendId'] } } } },
-        responses: { '201': { description: 'Tracked' } },
+        parameters: [
+          {
+            name: 'Idempotency-Key',
+            in: 'header',
+            schema: { type: 'string', maxLength: 255 },
+            description: 'DB-wide conversion scope, not per account/caller. Retained indefinitely; namespace with integration/account/event IDs. The same key records one conversion; a completed response is replayed. Keyed automation pushes have persistent action keys; unresolved sends at/after 24h require manual review. Webhooks and non-send effects are not exactly-once.',
+          },
+        ],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { conversionPointId: { type: 'string' }, friendId: { type: 'string' }, userId: { type: 'string' }, affiliateCode: { type: 'string' }, metadata: { type: 'object' }, fireEvent: { type: 'boolean', description: 'Also fire cv_fire. Requires Idempotency-Key.' } }, required: ['conversionPointId', 'friendId'] } } } },
+        responses: {
+          '201': { description: 'Tracked (or replayed for a completed Idempotency-Key)' },
+          '409': lineIdempotencyConflict,
+          '422': { description: 'Idempotency-Key reused for a different request, or fireEvent for a friend whose LINE account cannot be determined' },
+        },
       },
     },
     '/api/conversions/events': {
