@@ -1,107 +1,104 @@
-import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
+import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 
-const getLineAccounts = vi.fn();
-const createAccountHealthLog = vi.fn();
-const getAccountHealthLogs = vi.fn();
-
-vi.mock('@line-crm/db', () => ({
-  getLineAccounts: (...args: unknown[]) => getLineAccounts(...args),
-  createAccountHealthLog: (...args: unknown[]) => createAccountHealthLog(...args),
-  getAccountHealthLogs: (...args: unknown[]) => getAccountHealthLogs(...args),
+const dbMocks = vi.hoisted(() => ({
+  getLineAccounts: vi.fn(),
+  createAccountHealthLog: vi.fn().mockResolvedValue({ id: 'log-1' }),
+  getAccountHealthLogs: vi.fn().mockResolvedValue([]),
+  recordTokenUnauthorized: vi.fn().mockResolvedValue(undefined),
+  clearTokenUnauthorized: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { checkAccountHealth } = await import('./ban-monitor.js');
+vi.mock('@line-crm/db', () => dbMocks);
 
-/** messages_log の集計だけを返す最小の D1 スタブ。 */
-function dbStub(): D1Database {
+vi.mock('./quota-alert.js', () => ({
+  countDeliverableAudience: vi.fn(),
+  getLinePlanQuotaShortfall: vi.fn(),
+  notifyQuotaAlert: vi.fn(),
+}));
+
+import { checkAccountHealth } from './ban-monitor.js';
+
+const ACCOUNT = {
+  id: 'acc-1',
+  name: 'メイン',
+  is_active: 1,
+  channel_access_token: 'token',
+};
+
+function makeDb(): D1Database {
+  const stmt = {
+    bind: vi.fn().mockReturnThis(),
+    first: vi.fn().mockResolvedValue({ count: 0 }),
+  };
   return {
-    prepare: () => ({
-      bind: () => ({ first: async () => ({ count: 0 }) }),
-    }),
+    prepare: vi.fn(() => stmt),
   } as unknown as D1Database;
 }
 
-function log(riskLevel: string, errorCode: number | null) {
-  return {
-    id: 'log-1',
-    line_account_id: 'acc-1',
-    error_code: errorCode,
-    error_count: errorCode === null ? 0 : 1,
-    check_period: '2026-08-26T13:00:00.000+09:00',
-    risk_level: riskLevel,
-    created_at: '2026-08-26T13:00:00.000+09:00',
-  };
-}
+const okResponse = () => new Response(JSON.stringify({ displayName: 'bot' }), { status: 200 });
+const statusResponse = (status: number) => new Response('error', { status });
 
-describe('checkAccountHealth', () => {
-  beforeEach(() => {
-    getLineAccounts.mockReset();
-    createAccountHealthLog.mockReset();
-    getAccountHealthLogs.mockReset();
-    getLineAccounts.mockResolvedValue([
-      { id: 'acc-1', channel_access_token: 'token', is_active: 1 },
-    ]);
+beforeEach(() => {
+  vi.clearAllMocks();
+  dbMocks.getLineAccounts.mockResolvedValue([ACCOUNT]);
+  dbMocks.getAccountHealthLogs.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe('checkAccountHealth — 401 handling (B-05)', () => {
+  test('401 (revoked token) is treated as danger and recorded for connection health', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(statusResponse(401)));
+    const db = makeDb();
+
+    await checkAccountHealth(db);
+
+    expect(dbMocks.createAccountHealthLog).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ lineAccountId: 'acc-1', errorCode: 401, riskLevel: 'danger' }),
+    );
+    expect(dbMocks.recordTokenUnauthorized).toHaveBeenCalledWith(db, 'acc-1');
+    expect(dbMocks.clearTokenUnauthorized).not.toHaveBeenCalled();
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  test('403 keeps its existing danger semantics without a 401 record', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(statusResponse(403)));
+    const db = makeDb();
+
+    await checkAccountHealth(db);
+
+    expect(dbMocks.createAccountHealthLog).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ lineAccountId: 'acc-1', errorCode: 403, riskLevel: 'danger' }),
+    );
+    expect(dbMocks.recordTokenUnauthorized).not.toHaveBeenCalled();
   });
 
-  test('状態が前回から変わっていなければログを書かない', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
-    getAccountHealthLogs.mockResolvedValue([log('normal', null)]);
+  test('429 stays warning', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(statusResponse(429)));
+    const db = makeDb();
 
-    await checkAccountHealth(dbStub());
+    await checkAccountHealth(db);
 
-    expect(createAccountHealthLog).not.toHaveBeenCalled();
+    expect(dbMocks.createAccountHealthLog).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ lineAccountId: 'acc-1', errorCode: 429, riskLevel: 'warning' }),
+    );
   });
 
-  test('403 が出て risk が変わったらログを書く', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
-    getAccountHealthLogs.mockResolvedValue([log('normal', null)]);
+  test('a healthy bot/info call clears a previous 401 record so health recovers immediately', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse()));
+    const db = makeDb();
+    // 最新のヘルスログも正常状態 — 状態変化 dedup によりログは増えない。
+    dbMocks.getAccountHealthLogs.mockResolvedValue([{ risk_level: 'normal', error_code: null }]);
 
-    await checkAccountHealth(dbStub());
+    await checkAccountHealth(db);
 
-    expect(createAccountHealthLog).toHaveBeenCalledTimes(1);
-    expect(createAccountHealthLog.mock.calls[0][1]).toMatchObject({
-      lineAccountId: 'acc-1',
-      errorCode: 403,
-      riskLevel: 'danger',
-    });
-  });
-
-  test('403 が続いている間は最初の1回しか書かない', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
-    getAccountHealthLogs.mockResolvedValue([log('danger', 403)]);
-
-    await checkAccountHealth(dbStub());
-
-    expect(createAccountHealthLog).not.toHaveBeenCalled();
-  });
-
-  test('履歴が1件も無ければ現在の状態を記録する', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
-    getAccountHealthLogs.mockResolvedValue([]);
-
-    await checkAccountHealth(dbStub());
-
-    expect(createAccountHealthLog).toHaveBeenCalledTimes(1);
-    expect(createAccountHealthLog.mock.calls[0][1]).toMatchObject({
-      riskLevel: 'normal',
-      errorCode: undefined,
-    });
-  });
-
-  test('risk は同じでもエラーコードが変わったら記録する', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })));
-    getAccountHealthLogs.mockResolvedValue([log('normal', null)]);
-
-    await checkAccountHealth(dbStub());
-
-    expect(createAccountHealthLog).toHaveBeenCalledTimes(1);
-    expect(createAccountHealthLog.mock.calls[0][1]).toMatchObject({
-      errorCode: 500,
-      riskLevel: 'normal',
-    });
+    expect(dbMocks.clearTokenUnauthorized).toHaveBeenCalledWith(db, 'acc-1');
+    expect(dbMocks.recordTokenUnauthorized).not.toHaveBeenCalled();
+    expect(dbMocks.createAccountHealthLog).not.toHaveBeenCalled(); // normal state, unchanged
   });
 });
