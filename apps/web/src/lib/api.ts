@@ -35,6 +35,31 @@ import type {
 } from '@line-crm/shared'
 import { getApiBase } from './api-base'
 
+/** Per-account delivery-health snapshot for the dashboard cards. */
+export type AccountDeliveryHealth = {
+  lineAccountId: string
+  name: string
+  quota: {
+    type: string | null
+    limit: number | null
+    consumption: number | null
+    remaining: number | null
+  }
+  quotaAlert: boolean
+  insight: {
+    /** 'unready' = LINE がまだ前日分を集計していない状態（失敗とは別物） */
+    status: 'ready' | 'unready' | 'error'
+    date: string | null
+    followers: number | null
+    targetedReaches: number | null
+    blocks: number | null
+    followersDelta: number | null
+    blocksDelta: number | null
+  }
+  messagesThisMonth: number | null
+  errors: string[]
+}
+
 /** Affiliate offer (案件) as returned by the worker. */
 export type AffiliateOffer = {
   id: string
@@ -72,7 +97,12 @@ export type ApiBroadcast = Omit<Broadcast, 'targetType'> & {
   dedupPriority: string[] | null;
   failedAccountIds: string[] | null;
   trackLinks: boolean;
+<<<<<<< HEAD
   segmentConditions?: string | null;
+=======
+  /** Saved include/exclude conditions; honoured by send, scheduler and preview-count. */
+  segmentConditions?: import('@/components/broadcasts/segment-conditions').SegmentCondition | null;
+>>>>>>> upstream/main
 };
 
 /** Question type for `/forms` fields — matches the worker/client submission consumers. */
@@ -576,6 +606,7 @@ export const api = {
         scheduledAt?: string | null
         segmentConditions?: string | null
         trackLinks?: boolean
+        segmentConditions?: import('@/components/broadcasts/segment-conditions').SegmentCondition | null
       }
     ) =>
       fetchApi<ApiResponse<ApiBroadcast>>(`/api/broadcasts/${id}`, {
@@ -707,6 +738,10 @@ export const api = {
   lineAccounts: {
     list: () =>
       fetchApi<ApiResponse<LineAccount[]>>('/api/line-accounts'),
+    deliveryHealth: () =>
+      fetchApi<ApiResponse<{ insightDate: string; accounts: AccountDeliveryHealth[] }>>(
+        '/api/line-accounts/delivery-health',
+      ),
     get: (id: string) =>
       fetchApi<ApiResponse<LineAccount>>(`/api/line-accounts/${id}`),
     create: (data: {
@@ -1340,7 +1375,7 @@ export const api = {
         minWaitMinutes?: number;
         page?: number;
         pageSize?: number;
-      }) => {
+      }, request?: Pick<RequestInit, 'signal'>) => {
         const p = new URLSearchParams();
         if (opts?.q) p.set('q', opts.q);
         if (opts?.account) p.set('account', opts.account);
@@ -1364,14 +1399,14 @@ export const api = {
             lastIncomingType: string;
             lastIncomingContent: string;
           }>;
-        }>>(`/api/inbox/unanswered${qs ? `?${qs}` : ''}`);
+        }>>(`/api/inbox/unanswered${qs ? `?${qs}` : ''}`, request);
       },
-      count: () =>
+      count: (request?: Pick<RequestInit, 'signal'>) =>
         fetchApi<ApiResponse<{
           total: number;
           byAccount: Array<{ accountId: string; accountName: string; count: number }>;
           oldestWaitMinutes: number | null;
-        }>>('/api/inbox/unanswered/count'),
+        }>>('/api/inbox/unanswered/count', request),
     },
   },
   richMenuGroups: {
@@ -1959,7 +1994,7 @@ export const bookingApi = {
     fetchApi<{
       connection: BookingGoogleCalendarConnection | null;
       service_account: { configured: boolean; email: string | null };
-      oauth: { configured: boolean };
+      oauth: { configured: boolean; managed?: boolean };
     }>(withAccount(`/api/booking/admin/staff/${staffId}/google-calendar`, accountId)),
   startGoogleCalendarOAuth: (accountId: string, staffId: string) =>
     fetchApi<{ authorization_url: string }>(
