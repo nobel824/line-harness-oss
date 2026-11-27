@@ -1,3 +1,5 @@
+import { calendarCredentialsFromEnv } from '../services/google-calendar-broker.js';
+import { createAuthorizedRouter } from '../middleware/authorized-router.js';
 // オートウェビナー (疑似ライブ) HTTP routes.
 //
 // LIFF:   /api/liff/webinars/:slug          (id_token verify で friend 特定)
@@ -79,7 +81,7 @@ import { requireRole } from '../middleware/role-guard.js';
 import { safeDecode } from '../utils/safe-decode.js';
 import type { Env } from '../index.js';
 
-const webinarRoutes = new Hono<Env>();
+const webinarRoutes = createAuthorizedRouter<Env>();
 
 const COMMENT_MAX = 500;
 const SESSION_COMMENT_LIMIT = 60;
@@ -672,12 +674,7 @@ webinarRoutes.get('/api/liff/webinars/:slug/consultation-slots', async (c) => {
       accountId: auth.webinar.account_id,
       friendId: auth.friendId,
       now: new Date(),
-      credentials: {
-        email: c.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        privateKey: c.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY,
-        oauthClientId: c.env.GOOGLE_OAUTH_CLIENT_ID,
-        oauthClientSecret: c.env.GOOGLE_OAUTH_CLIENT_SECRET,
-      },
+      credentials: calendarCredentialsFromEnv(c.env),
     });
     return c.json({ ok: true, data });
   } catch (error) {
@@ -707,6 +704,7 @@ webinarRoutes.post('/api/liff/webinars/:slug/consultation-book', async (c) => {
       friendId: auth.friendId,
       startsAt: body.startsAt,
       now: new Date(),
+<<<<<<< HEAD
       credentials: {
         email: c.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         privateKey: c.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY,
@@ -714,6 +712,9 @@ webinarRoutes.post('/api/liff/webinars/:slug/consultation-book', async (c) => {
         oauthClientSecret: c.env.GOOGLE_OAUTH_CLIENT_SECRET,
       },
       adminNotifyLineUserId: c.env.ADMIN_NOTIFY_LINE_USER_ID,
+=======
+      credentials: calendarCredentialsFromEnv(c.env),
+>>>>>>> upstream/main
       proxyBaseUrl: new URL(c.req.url).origin,
       proxyDispatch: (request) => dispatchLineProxyLocally(request, c.env, c.executionCtx),
     });
@@ -1132,9 +1133,9 @@ webinarRoutes.put('/api/webinars/:id', requireRole('owner', 'admin'), async (c) 
   }
 });
 
-webinarRoutes.delete('/api/webinars/:id', async (c) => {
+webinarRoutes.delete('/api/webinars/:id', requireRole('owner', 'admin'), async (c) => {
   try {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     const row = await getWebinarById(c.env.DB, id);
     if (!row) return c.json({ success: false, error: 'Not found' }, 404);
     await deleteWebinar(c.env.DB, id);
@@ -1163,9 +1164,9 @@ webinarRoutes.get('/api/webinars/:id/comments', async (c) => {
   }
 });
 
-webinarRoutes.put('/api/webinars/:id/comments', async (c) => {
+webinarRoutes.put('/api/webinars/:id/comments', requireRole('owner', 'admin'), async (c) => {
   try {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     const row = await getWebinarById(c.env.DB, id);
     if (!row) return c.json({ success: false, error: 'Not found' }, 404);
     const body = await c.req.json<{ comments?: unknown }>();
@@ -1223,9 +1224,9 @@ webinarRoutes.get('/api/webinars/:id/ctas', async (c) => {
 
 // CTA カード一括置換。kind='form' は forms 実在チェック、kind='url' は https? 必須。
 // 全要素検証 → 不正が1件でもあれば何も書かない (comments と同じ all-or-nothing)。
-webinarRoutes.put('/api/webinars/:id/ctas', async (c) => {
+webinarRoutes.put('/api/webinars/:id/ctas', requireRole('owner', 'admin'), async (c) => {
   try {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     const row = await getWebinarById(c.env.DB, id);
     if (!row) return c.json({ success: false, error: 'Not found' }, 404);
     const body = await c.req.json<{ ctas?: unknown }>();
