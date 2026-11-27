@@ -1,3 +1,4 @@
+// Auth storage is integration-tested in security-hardening.test.ts.
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { Hono } from 'hono';
 

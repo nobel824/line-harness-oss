@@ -1,9 +1,10 @@
+import { createAuthorizedRouter } from '../middleware/authorized-router.js';
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 
 // Kept in lockstep with root package.json by scripts/sync-versions.sh, which the
 // pre-push hook verifies. Bumping this by hand alone will fail that check.
-export const HARNESS_VERSION = '0.23.1';
+export const HARNESS_VERSION = '0.24.3';
 export const API_VERSION = 1;
 export const CONNECTOR_VERSION = '2026-05-20';
 export const MIN_APP_VERSION = '1.0.0';
@@ -32,7 +33,7 @@ export const FEATURES = [
   'ig-cross-link',
 ] as const;
 
-export const capabilities = new Hono<Env>();
+export const capabilities = createAuthorizedRouter<Env>();
 
 capabilities.get('/api/capabilities', async (c) => {
   return c.json({

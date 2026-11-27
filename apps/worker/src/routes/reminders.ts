@@ -1,3 +1,5 @@
+import { createAuthorizedRouter } from '../middleware/authorized-router.js';
+import { validateMessageContent } from '@line-crm/shared';
 import { Hono } from 'hono';
 import {
   getReminders,
@@ -14,7 +16,7 @@ import {
 } from '@line-crm/db';
 import type { Env } from '../index.js';
 
-const reminders = new Hono<Env>();
+const reminders = createAuthorizedRouter<Env>();
 
 // ========== リマインダCRUD ==========
 
@@ -131,6 +133,8 @@ reminders.post('/api/reminders/:id/steps', async (c) => {
     if (body.offsetMinutes === undefined || !body.messageType || !body.messageContent) {
       return c.json({ success: false, error: 'offsetMinutes, messageType, messageContent are required' }, 400);
     }
+    const contentError = validateMessageContent(body.messageType, body.messageContent);
+    if (contentError) return c.json({ success: false, error: contentError }, 400);
     const step = await createReminderStep(c.env.DB, { reminderId, ...body });
     return c.json({
       success: true,

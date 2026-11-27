@@ -40,3 +40,13 @@ describe('update-client manifest URL', () => {
     )
   })
 })
+
+it('uses owner cookies and CSRF, never a public build-time key, for updates',async()=>{
+ vi.stubEnv('NEXT_PUBLIC_API_URL','https://worker.example.test')
+ vi.stubGlobal('window',{location:{hostname:'admin.example.test',origin:'https://admin.example.test'}})
+ vi.stubGlobal('localStorage',{getItem:()=> 'test-csrf'})
+ const fetchMock=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({updateId:'one'}))
+ const {startUpdate}=await loadUpdateClient();await startUpdate()
+ expect(fetchMock).toHaveBeenCalledWith('https://worker.example.test/admin/update/start',expect.objectContaining({credentials:'include',headers:{'X-CSRF-Token':'test-csrf'}}))
+ vi.unstubAllGlobals()
+})

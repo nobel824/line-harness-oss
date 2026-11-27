@@ -1,6 +1,9 @@
+import { runWithOutboundConfig } from './lib/outbound-url.js';
+import { flushXGateEvents } from './services/x-gate-client.js';
 import { LineClient } from '@line-crm/line-sdk';
 import {
   getLineAccounts,
+  purgeIgLinkTokenUses,
   enqueueFollowingMileageMilestones,
   processPendingMileageEvents,
   cleanupWebhookEventDedup,
@@ -45,6 +48,16 @@ export function isFiveMinuteTick(event: { cron: string; scheduledTime: number })
   return event.cron === '* * * * *' && new Date(event.scheduledTime).getUTCMinutes() % 5 === 0;
 }
 
+/**
+ * 毎時 (分=0) の tick か。月次粒度で十分な監視 (LINE プランクォータ) を分足・
+ * 5分足の tick から間引くのに使う。isFiveMinuteTick と同じく 6時間足 cron は
+ * 二重実行防止で弾く。
+ */
+export function isHourlyTick(event: { cron: string; scheduledTime: number }): boolean {
+  if (event.cron === '0 */6 * * *') return false;
+  return new Date(event.scheduledTime).getUTCMinutes() === 0;
+}
+
 // Scheduled handler — Cron Trigger と DO alarm (durable-objects/tenant-scheduler.ts)
 // の双方から呼ばれる共通ジョブ本体。index.ts から切り出しているのは、
 // tenant-scheduler.ts がこの関数を import する際に index.ts 自体との
@@ -53,11 +66,26 @@ export function isFiveMinuteTick(event: { cron: string; scheduledTime: number })
 // どの文字列を積むかだけで、ジョブ本体のロジックは一切変えていない。
 //
 // 全アカウント分をまとめて1回だけ実行する
-export async function scheduled(
+/** Cron entry point. Outgoing webhook deliveries made from scheduled work obey the same destination policy as requests. */
+export function scheduled(
   event: ScheduledEvent,
   env: Env['Bindings'],
   ctx: ExecutionContext,
 ): Promise<void> {
+  return runWithOutboundConfig(env, () => runScheduled(event, env, ctx));
+}
+
+async function runScheduled(
+  event: ScheduledEvent,
+  env: Env['Bindings'],
+  ctx: ExecutionContext,
+): Promise<void> {
+  // Reuse the existing hourly tick; bounded cleanup also runs after policy rollback.
+  if (isHourlyTick(event)) {
+    try { await purgeIgLinkTokenUses(env.DB, Math.floor(event.scheduledTime / 1000)); }
+    catch { console.warn('[ig-link] cleanup_failed'); }
+  }
+  await flushXGateEvents(env);
   // Get all active accounts from DB
   const dbAccounts = await getLineAccounts(env.DB);
 
@@ -94,6 +122,24 @@ export async function scheduled(
     await refreshLineAccessTokens(env.DB);
   } catch (e) {
     console.error('token refresh error:', e);
+  }
+
+  // 友だち1人宛ての予約送信 (1:1)。時刻厳守・軽量なので重いジョブより先に実行。
+  // 行を pending→sending で確保してから送るため、cron と DO alarm が重なっても二重送信しない。
+  try {
+    const { processDueFriendScheduledMessages } = await import('./services/friend-scheduled-messages.js');
+    const result = await processDueFriendScheduledMessages(env.DB, {
+      now: new Date(),
+      defaultAccessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
+      workerUrl: env.WORKER_URL || env.WORKER_PUBLIC_URL || '',
+    });
+    if (result.sent + result.failed + result.expired + result.stuck > 0) {
+      console.log(
+        `[friend-scheduled-messages] sent=${result.sent} failed=${result.failed} expired=${result.expired} stuck=${result.stuck}`,
+      );
+    }
+  } catch (e) {
+    console.error('friend-scheduled-messages error:', e instanceof Error ? e.message : e);
   }
 
   try {
@@ -207,7 +253,10 @@ export async function scheduled(
   // 分の LINE API (/v2/bot/info) を毎分叩くことになり (2026-08-26 実測: 43テナントで
   // 1日6.2万回)、そこまでの即時性は要らない — 403 の検知が最大5分遅れるだけ。
   if (isFiveMinuteTick(event)) {
-    jobs.push(checkAccountHealth(env.DB));
+    // クォータ残量は月次粒度の信号なので毎時 tick だけ確認する (checkQuota)。
+    // 5分毎に全アカウント分の quota API を叩くと bot/info を分足→5分に
+    // 落とした経緯 (上のコメント参照) と同じ過剰負荷になる。
+    jobs.push(checkAccountHealth(env.DB, { checkQuota: isHourlyTick(event) }));
     jobs.push(
       processPendingMileageEvents(env.DB, { limit: 100 }).then((result) => {
         if (result.claimed > 0) {
