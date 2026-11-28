@@ -1,3 +1,4 @@
+import { createAuthorizedRouter } from '../middleware/authorized-router.js';
 import { Hono } from 'hono';
 import {
   BUNDLE_VERSION,
@@ -21,8 +22,8 @@ type Env = {
 // dashboard's upgrade banner before the user logs in. The manifest proxy exists
 // because GitHub release assets do not reliably send browser CORS headers.
 // Task 18's /admin/update/* mounts under the same /admin prefix but layers
-// ADMIN_API_KEY middleware on those subpaths.
-const app = new Hono<Env>();
+// owner-session middleware on those subpaths.
+const app = createAuthorizedRouter<Env>();
 
 app.get('/version', (c) =>
   c.json({

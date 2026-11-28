@@ -1,4 +1,5 @@
-import { describe, expect, test, vi } from 'vitest';
+import { createAuthTestDb } from '../test-support/auth-db.js';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { authMiddleware } from './auth.js';
@@ -6,19 +7,17 @@ import { resolveCorsOrigin } from './admin-auth-config.js';
 import { adminAuth } from '../routes/admin-auth.js';
 import type { Env } from '../index.js';
 
-vi.mock('@line-crm/db', () => ({
-  getStaffByApiKey: vi.fn(async (_db: unknown, token: string) => {
-    if (token !== 'staff-key') return null;
-    return { id: 'staff-1', name: 'Staff One', role: 'admin' };
-  }),
-}));
+const authDb = createAuthTestDb();
+beforeEach(() => authDb.reset());
+afterAll(() => authDb.close());
+
 
 const PAGES = 'https://your-admin.pages.dev';
 const WORKERS = 'https://your-worker.your-subdomain.workers.dev';
 
 function env(overrides: Partial<Env['Bindings']> = {}): Env['Bindings'] {
   return {
-    DB: {} as D1Database,
+    DB: authDb.db,
     IMAGES: {} as R2Bucket,
     ASSETS: {} as Fetcher,
     TENANT_SCHEDULER: {} as Env['Bindings']['TENANT_SCHEDULER'],
@@ -85,7 +84,8 @@ describe('admin login cookie attributes', () => {
     expect(body.csrfToken).toBeTruthy();
 
     const session = cookieFor(res, 'lh_admin_session') ?? '';
-    expect(session).toContain('lh_admin_session=staff-key');
+    expect(session).toMatch(/^lh_admin_session=lhs_[A-Za-z0-9_-]{43};/);
+    expect(session).not.toContain('staff-key');
     expect(session).toContain('HttpOnly');
     expect(session).toContain('Secure');
     expect(session).toContain('SameSite=None');

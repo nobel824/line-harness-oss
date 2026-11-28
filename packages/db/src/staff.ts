@@ -1,23 +1,47 @@
 import { jstNow } from './utils.js';
 
+export type StaffApiScope = 'messages:read' | 'messages:send';
+
+export function isStaffApiScopes(value: unknown): value is StaffApiScope[] | null {
+  return value === null || (Array.isArray(value) && value.every(
+    (scope) => scope === 'messages:read' || scope === 'messages:send',
+  ));
+}
+
+/** NULL is a legacy staff key; invalid stored restrictions deny all access. */
+export function parseStaffApiScopes(value: string | null | undefined): StaffApiScope[] | null {
+  if (value == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && isStaffApiScopes(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
 export interface StaffMember {
   id: string;
   name: string;
   email: string | null;
   role: 'owner' | 'admin' | 'staff';
+  /** @deprecated Storage placeholder after migration; never expose to clients. */
   api_key: string;
+  api_key_hash?: string | null;
+  api_key_last4?: string | null;
+  api_key_created_at?: string | null;
+  api_scopes?: string | null;
   is_active: number;
   created_at: string;
   updated_at: string;
 }
 
 export interface CreateStaffInput {
+  apiScopes?: StaffApiScope[] | null;
   name: string;
   email?: string | null;
   role: 'owner' | 'admin' | 'staff';
 }
 
 export interface UpdateStaffInput {
+  apiScopes?: StaffApiScope[] | null;
   name?: string;
   email?: string | null;
   role?: 'owner' | 'admin' | 'staff';
@@ -31,14 +55,76 @@ function generateApiKey(): string {
   return `lh_${hex}`;
 }
 
-export async function getStaffByApiKey(
-  db: D1Database,
-  apiKey: string,
-): Promise<StaffMember | null> {
-  return db
-    .prepare('SELECT * FROM staff_members WHERE api_key = ? AND is_active = 1')
-    .bind(apiKey)
-    .first<StaffMember>();
+export async function hashApiKey(key: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)));
+  return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** A late write from the pre-migration Worker may replace plaintext without
+ * updating the digest. Treat that stored plaintext as the latest credential. */
+export async function staffCredentialFingerprint(staff: StaffMember): Promise<string | null> {
+  if (staff.api_key === `hashed:${staff.id}`) return staff.api_key_hash ?? null;
+  if (!staff.api_key || staff.api_key.startsWith('hashed:')) return null;
+  return hashApiKey(staff.api_key);
+}
+
+function isMissingKeyHashColumn(error: unknown): boolean {
+  return error instanceof Error && /no such column: (?:[a-z_]+\.)?api_key_hash\b/i.test(error.message);
+}
+
+export async function getStaffByApiKey(db: D1Database, apiKey: string, options: { erasePlaintext?: boolean } = {}): Promise<StaffMember | null> {
+  if (!apiKey || apiKey.startsWith('hashed:')) return null;
+  const digest = await hashApiKey(apiKey);
+  let legacySchema = false;
+  try {
+    const found = await db.prepare('SELECT * FROM staff_members WHERE api_key_hash = ? AND is_active = 1')
+      .bind(digest).first<StaffMember>();
+    if (found && found.api_key === `hashed:${found.id}`) return found;
+  } catch (error) {
+    // Never interpret an outage or a different schema error as authentication.
+    if (!isMissingKeyHashColumn(error)) throw error;
+    legacySchema = true;
+    console.warn('[deprecation] staff key hash migration not applied');
+  }
+  const legacy = await db.prepare('SELECT * FROM staff_members WHERE api_key = ? AND is_active = 1')
+    .bind(apiKey).first<StaffMember>();
+  if (!legacy || legacySchema || options.erasePlaintext === false) return legacy;
+  let migrated: StaffMember | null;
+  try {
+    // A late legacy writer can replace plaintext while leaving an older hash.
+    // Bind both observed values so migration cannot overwrite a rotation.
+    migrated = await db.prepare(
+      `UPDATE staff_members SET api_key_hash = ?, api_key_last4 = ?, api_key = ?
+       WHERE id = ? AND api_key = ? AND api_key_hash IS ? AND is_active = 1 RETURNING *`,
+    ).bind(digest, apiKey.slice(-4), `hashed:${legacy.id}`, legacy.id, apiKey, legacy.api_key_hash ?? null).first<StaffMember>();
+  } catch {
+    console.warn('[deprecation] staff key hash backfill deferred');
+    return legacy;
+  }
+  if (migrated) return migrated;
+  // A failed CAS requires a fresh authoritative credential. A stale digest
+  // accompanied by different plaintext must never authenticate the old key.
+  const current = await db.prepare('SELECT * FROM staff_members WHERE api_key_hash = ? AND is_active = 1')
+    .bind(digest).first<StaffMember>();
+  return current && current.api_key === `hashed:${current.id}` ? current : null;
+
+}
+
+/** One bounded scan of the pending-only index; no COUNT/full-table sweep. */
+export async function backfillStaffApiKeyHashes(db: D1Database, options: { limit?: number } = {}): Promise<number> {
+  const requested = Number.isFinite(options.limit) ? options.limit! : 100;
+  const limit = Math.max(1, Math.min(100, Math.floor(requested)));
+  const rows = await db.prepare("SELECT id, api_key, api_key_hash FROM staff_members INDEXED BY idx_staff_members_plaintext WHERE api_key NOT GLOB 'hashed:*' ORDER BY id LIMIT ?")
+    .bind(limit).all<Pick<StaffMember, 'id' | 'api_key' | 'api_key_hash'>>();
+  let migrated = 0;
+  for (const row of rows.results) {
+    const digest = await hashApiKey(row.api_key);
+    const result = await db.prepare(
+      'UPDATE staff_members SET api_key_hash = ?, api_key_last4 = ?, api_key = ? WHERE id = ? AND api_key = ? AND api_key_hash IS ?',
+    ).bind(digest, row.api_key.slice(-4), `hashed:${row.id}`, row.id, row.api_key, row.api_key_hash ?? null).run();
+    migrated += result.meta.changes;
+  }
+  return migrated;
 }
 
 export async function getStaffMembers(db: D1Database): Promise<StaffMember[]> {
@@ -61,23 +147,22 @@ export async function getStaffById(
 export async function createStaffMember(
   db: D1Database,
   input: CreateStaffInput,
-): Promise<StaffMember> {
+  options: { erasePlaintext?: boolean } = {},
+): Promise<{ member: StaffMember; apiKey: string }> {
   const id = crypto.randomUUID();
   const now = jstNow();
   const apiKey = generateApiKey();
 
   await db
     .prepare(
-      `INSERT INTO staff_members (id, name, email, role, api_key, is_active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+      `INSERT INTO staff_members (id, name, email, role, api_key, api_key_hash, api_key_last4, api_key_created_at, api_scopes, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     )
-    .bind(id, input.name, input.email ?? null, input.role, apiKey, now, now)
+    .bind(id, input.name, input.email ?? null, input.role, options.erasePlaintext === false ? apiKey : `hashed:${id}`, await hashApiKey(apiKey), apiKey.slice(-4), now, input.apiScopes == null ? null : JSON.stringify(input.apiScopes), now, now)
     .run();
 
-  return (await db
-    .prepare('SELECT * FROM staff_members WHERE id = ?')
-    .bind(id)
-    .first<StaffMember>())!;
+  const member = (await getStaffById(db, id))!;
+  return { member, apiKey };
 }
 
 export async function updateStaffMember(
@@ -89,6 +174,7 @@ export async function updateStaffMember(
   const sets: string[] = ['updated_at = ?'];
   const values: (string | number | null)[] = [now];
 
+  if (input.apiScopes !== undefined) { sets.push('api_scopes = ?'); values.push(input.apiScopes === null ? null : JSON.stringify(input.apiScopes)); }
   if (input.name !== undefined) { sets.push('name = ?'); values.push(input.name); }
   if (input.email !== undefined) { sets.push('email = ?'); values.push(input.email ?? null); }
   if (input.role !== undefined) { sets.push('role = ?'); values.push(input.role); }
@@ -107,12 +193,12 @@ export async function deleteStaffMember(db: D1Database, id: string): Promise<voi
   await db.prepare('DELETE FROM staff_members WHERE id = ?').bind(id).run();
 }
 
-export async function regenerateStaffApiKey(db: D1Database, id: string): Promise<string> {
+export async function regenerateStaffApiKey(db: D1Database, id: string, options: { erasePlaintext?: boolean } = {}): Promise<string> {
   const newKey = generateApiKey();
   const now = jstNow();
   const result = await db
-    .prepare('UPDATE staff_members SET api_key = ?, updated_at = ? WHERE id = ?')
-    .bind(newKey, now, id)
+    .prepare('UPDATE staff_members SET api_key = ?, api_key_hash = ?, api_key_last4 = ?, api_key_created_at = ?, updated_at = ? WHERE id = ?')
+    .bind(options.erasePlaintext === false ? newKey : `hashed:${id}`, await hashApiKey(newKey), newKey.slice(-4), now, now, id)
     .run();
   if (result.meta.changes === 0) {
     throw new Error(`Staff member not found: ${id}`);
@@ -134,4 +220,9 @@ export async function countActiveStaffByRole(db: D1Database, role: string): Prom
     .bind(role)
     .first<{ count: number }>();
   return result?.count ?? 0;
+}
+
+/** Includes disabled and duplicate records so identity login cannot fall through to owner. */
+export async function getStaffByNormalizedEmail(db:D1Database,email:string):Promise<StaffMember[]> {
+ const result=await db.prepare('SELECT * FROM staff_members WHERE lower(trim(email))=? LIMIT 2').bind(email.trim().toLowerCase()).all<StaffMember>();return result.results;
 }

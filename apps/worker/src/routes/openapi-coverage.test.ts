@@ -126,7 +126,30 @@ const CLIENT_ONLY: readonly string[] = [
  * rich-menu-groups / integrations あたりが機能として大きい。
  */
 const KNOWN_GAPS: readonly string[] = [
+<<<<<<< HEAD
   // booking (27)
+=======
+  // admin security: passkeys, magic link, machine keys, extensions, setup check (18)
+  'DELETE /api/auth/passkeys/{id}',
+  'DELETE /api/machine-keys/{id}',
+  'GET /api/admin/extensions',
+  'GET /api/auth/methods',
+  'GET /api/auth/passkeys',
+  'GET /api/inbound-events',
+  'GET /api/machine-keys',
+  'GET /api/setup/check',
+  'PATCH /api/auth/passkeys/{id}',
+  'POST /api/admin/extensions/{id}/launch',
+  'POST /api/auth/logout-all',
+  'POST /api/auth/magic-link',
+  'POST /api/auth/magic-link/consume',
+  'POST /api/auth/passkeys/login/options',
+  'POST /api/auth/passkeys/login/verify',
+  'POST /api/auth/passkeys/register/options',
+  'POST /api/auth/passkeys/register/verify',
+  'POST /api/machine-keys',
+  // booking (26)
+>>>>>>> upstream/main
   'DELETE /api/booking/admin/menus/{id}',
   'DELETE /api/booking/admin/staff/{id}',
   'DELETE /api/booking/admin/staff/{id}/google-calendar',
@@ -185,7 +208,7 @@ const KNOWN_GAPS: readonly string[] = [
   'POST /api/rich-menu-groups/{groupId}/pages/{pageId}/image',
   'POST /api/rich-menu-groups/{groupId}/publish',
   'POST /api/rich-menu-groups/{groupId}/unpublish',
-  // friends (12)
+  // friends (11)
   'DELETE /api/friends/{friendId}/rich-menu',
   'GET /api/friends/ref-stats',
   'GET /api/friends/{friendId}/reminders',
@@ -195,7 +218,6 @@ const KNOWN_GAPS: readonly string[] = [
   'GET /api/friends/{id}/mileage',
   'GET /api/friends/{id}/score',
   'POST /api/friends/{friendId}/rich-menu',
-  'POST /api/friends/{id}/messages',
   'POST /api/friends/{id}/score',
   'PUT /api/friends/{id}/metadata',
   // admin (10)

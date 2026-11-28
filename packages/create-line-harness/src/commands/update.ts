@@ -497,17 +497,7 @@ export async function runUpdate(
   }
   const cfg = resolved.value;
 
-  // /admin/version is documented as public (intentionally un-authenticated
-  // so the dashboard can render the upgrade banner pre-login). The header
-  // is only sent in case a future Worker version starts requiring it.
-  const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
-  if (!ADMIN_API_KEY) {
-    p.log.warn(
-      "ADMIN_API_KEY 環境変数が未設定です。/admin/version は現在パブリックなので続行しますが、" +
-        "Worker が将来この認証を要求する場合は `export ADMIN_API_KEY=...` が必要になります。",
-    );
-  }
-
+  // Version discovery is public; never send an unrelated admin secret.
   p.log.success(`プロジェクト: ${state.projectName ?? cfg.workerName}`);
 
   // 0) workers.dev-hosted installs: if the account-level workers.dev
@@ -543,9 +533,7 @@ export async function runUpdate(
   const workerVersionUrl = `${cfg.workerPublicUrl.replace(/\/$/, "")}/admin/version`;
   let current: CurrentVersion;
   try {
-    const headers: Record<string, string> = {};
-    if (ADMIN_API_KEY) headers["x-admin-api-key"] = ADMIN_API_KEY;
-    const r = await fetch(workerVersionUrl, { headers });
+    const r = await fetch(workerVersionUrl);
     if (!r.ok) {
       throw new Error(`HTTP ${r.status}`);
     }
@@ -694,6 +682,7 @@ export async function runUpdate(
     creds,
     d1DatabaseId: cfg.d1DatabaseId,
     names: upgrade.migrations,
+    legacyMileageProjectionVersion: upgrade.legacy_mileage_projection_version,
     bundle,
     s,
   });
@@ -852,11 +841,16 @@ async function applyMigrations(opts: {
   names: string[];
   bundle: ParsedBundle;
   s: Spinner;
+  /** adoption 専用: 破壊的な旧世代 migration を probe + 記録のみで通す (エンジン側 doc 参照)。 */
+  adoptGrandfathered?: boolean;
+  legacyMileageProjectionVersion?: 1;
 }): Promise<void> {
   const { creds, d1DatabaseId, names, bundle, s } = opts;
   try {
     await applyD1Migrations({
       creds,
+      adoptGrandfathered: opts.adoptGrandfathered,
+      legacyMileageProjectionVersion: opts.legacyMileageProjectionVersion,
       databaseId: d1DatabaseId,
       names,
       migrations: bundle.migrations,
@@ -866,6 +860,10 @@ async function applyMigrations(opts: {
       onMigrationDone(result) {
         if (result.alreadyApplied) {
           s.stop(pc.dim(`Migration ${result.name}: 適用済み`));
+        } else if (result.adopted) {
+          // grandfathered 世代 (カットオフ 041 未満): 破壊的 SQL を含み得るため
+          // 実行せず、適用済みとして台帳へ記録のみ (既存 DB は適用後の構造が前提)。
+          s.stop(pc.dim(`Migration ${result.name}: 旧世代のため記録のみ (実行なし)`));
         } else if (result.skippedStatements > 0) {
           s.stop(
             `Migration ${result.name} 完了 (${result.executedStatements}文実行・${result.skippedStatements}文適用済み)`,
@@ -1218,10 +1216,13 @@ async function runAdoption(opts: {
   const bundle = await downloadAndVerifyBundle(target, s);
 
   // Replay every migration in the bundle, oldest first. Duplicates are
-  // skipped via the benign-error policy inside applyMigrations.
+  // skipped via the benign-error policy inside applyMigrations. 破壊的な
+  // 旧世代 migration (027/029) は再実行できないため、スキーマ実在を probe した
+  // 上で「適用済み記録のみ」で通す (adoptGrandfathered — エンジン側 doc 参照)。
   const allMigrations = Array.from(bundle.migrations.keys()).sort();
   p.log.info(
-    `全 ${allMigrations.length} migration を確認します（適用済みはスキップされます）`,
+    `全 ${allMigrations.length} migration を確認します（適用済みはスキップ、` +
+      `再実行不能な旧世代の再構築 migration は記録のみになります）`,
   );
   await applyMigrations({
     creds,
@@ -1229,6 +1230,8 @@ async function runAdoption(opts: {
     names: allMigrations,
     bundle,
     s,
+    adoptGrandfathered: true,
+    legacyMileageProjectionVersion: target.legacy_mileage_projection_version,
   });
 
   await deployWorkerFromBundle(creds, cfg, bundle, s);
