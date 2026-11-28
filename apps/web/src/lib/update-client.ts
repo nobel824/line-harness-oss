@@ -1,3 +1,4 @@
+import {getCsrfToken} from './api'
 import type {
   Manifest,
   CurrentVersion,
@@ -46,11 +47,6 @@ export function getManifestUrl(): string {
   return `${apiUrl()}/admin/manifest`
 }
 
-function adminKey(): string {
-  const v = process.env.NEXT_PUBLIC_ADMIN_API_KEY
-  if (!v) throw new Error('NEXT_PUBLIC_ADMIN_API_KEY not set')
-  return v
-}
 
 export async function getCurrentVersion(): Promise<CurrentVersion> {
   const r = await fetch(`${apiUrl()}/admin/version`)
@@ -69,7 +65,7 @@ export async function getCurrentVersion(): Promise<CurrentVersion> {
   }
 }
 
-export async function getManifest(): Promise<Manifest> {
+export async function getManifest(): Promise<Manifest & {signature?: {verified:boolean;kid?:string}}> {
   const r = await fetch(getManifestUrl(), { cache: 'no-store' })
   if (!r.ok) throw new Error(`manifest fetch failed ${r.status}`)
   return r.json() as Promise<Manifest>
@@ -78,7 +74,8 @@ export async function getManifest(): Promise<Manifest> {
 export async function startUpdate(): Promise<{ updateId: string }> {
   const r = await fetch(`${apiUrl()}/admin/update/start`, {
     method: 'POST',
-    headers: { 'x-admin-api-key': adminKey() },
+    credentials: 'include',
+    headers: { 'X-CSRF-Token': getCsrfToken() },
   })
   if (!r.ok) {
     const body = await r.text()
@@ -94,7 +91,7 @@ export async function getUpdateStatus(id: string): Promise<{
   error: string | null
 }> {
   const r = await fetch(`${apiUrl()}/admin/update/status/${id}`, {
-    headers: { 'x-admin-api-key': adminKey() },
+    credentials: 'include',
   })
   if (!r.ok) throw new Error(`status ${r.status}`)
   return r.json() as Promise<{
@@ -110,14 +107,8 @@ export function openUpdateStream(
   onEvent: (e: unknown) => void,
   onComplete: (final: unknown) => void,
 ): EventSource {
-  // KNOWN LIMITATION (Phase 6): EventSource cannot send custom request headers,
-  // but the worker's `/admin/update/stream/:id` requires `x-admin-api-key`.
-  // For Phase 6 we ship the structure and accept that the SSE connection will
-  // fail authentication at runtime — `startUpdate` and `getUpdateStatus` still
-  // work via fetch and the dashboard can poll status as a fallback.
-  // Phase 9 polish task: switch the gate to a cookie set at login OR add a
-  // signed query-param token. See task plan for `feat/upgrade-flow`.
-  const es = new EventSource(`${apiUrl()}/admin/update/stream/${id}`)
+  // Opaque owner cookie authenticates SSE; EventSource sends no bearer secret.
+  const es = new EventSource(`${apiUrl()}/admin/update/stream/${id}`, {withCredentials:true})
   es.addEventListener('progress', (m) =>
     onEvent(JSON.parse((m as MessageEvent).data)),
   )

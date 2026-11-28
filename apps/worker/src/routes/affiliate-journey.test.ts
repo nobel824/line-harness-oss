@@ -1,3 +1,4 @@
+// Auth storage is integration-tested in security-hardening.test.ts.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The heavy set-based aggregation SQL is covered against real SQLite in
